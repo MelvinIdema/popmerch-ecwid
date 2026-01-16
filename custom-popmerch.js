@@ -1,173 +1,183 @@
-function whenEcwidReady(cb, { step = 50, timeout = 10000 } = {}) {
-  const start = Date.now();
+(() => {
+  // ===== Config =====
+  const PUBLIC_TOKEN = "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf";
+  const OPTION_NAME = "Size"; // matcht name="Size" in je HTML
+  const CACHE_TTL_MS = 60_000;
 
-  (function tick() {
-    const ok =
-      window.Ecwid &&
-      Ecwid.OnAPILoaded &&
-      typeof Ecwid.OnAPILoaded.add === "function";
+  const POLL_STEP_MS = 50;
+  const POLL_TIMEOUT_MS = 10_000;
 
-    if (ok) return cb();
+  // ===== Utils =====
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-    if (Date.now() - start > timeout) {
-      console.warn("Ecwid niet beschikbaar binnen timeout");
-      return;
+  function getStoreIdSafe() {
+    try {
+      const id = window.Ecwid?.getOwnerId?.();
+      return typeof id === "number" && id > 0 ? id : null;
+    } catch {
+      return null;
     }
+  }
 
-    setTimeout(tick, step);
-  })();
-}
+  function getProductIdFromUrl() {
+    // Ecwid product urls bevatten vaak "...-p800716701"
+    const path = window.location.pathname || "";
+    const m = path.match(/-p(\d+)\b/i) || path.match(/\/p(\d+)\b/i);
+    return m ? Number(m[1]) : null;
+  }
 
-whenEcwidReady(() => {
-  console.log("Ecwid ready!");
-  Ecwid.OnAPILoaded.add(() => {
-    console.log("API loaded!");
-    Ecwid.OnPageLoaded.add((page) => {
-      console.log("Page loaded!", page);
-      if (page.type === "PRODUCT") {
-        console.log("page type is PRODUCT!");
-        // --- Config ---
-        const ECWID_PUBLIC_TOKEN = "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf";
-        const OPTION_NAME = "Size"; // komt overeen met name="Size" in jouw HTML
+  async function waitForEcwidReady() {
+    const start = Date.now();
+    while (Date.now() - start < POLL_TIMEOUT_MS) {
+      const ok =
+        window.Ecwid &&
+        typeof window.Ecwid.OnPageLoaded?.add === "function" &&
+        typeof window.Ecwid.getOwnerId === "function" &&
+        getStoreIdSafe();
 
-        (async function disableOutOfStockSizes(page) {
-          const productId = page?.productId;
-          const storeId =
-            (window.Ecwid?.getOwnerId?.() ?? null) ||
-            (window.instantsite?.getSiteId?.() ?? null);
+      if (ok) return;
+      await sleep(POLL_STEP_MS);
+    }
+    console.warn("[popmerch] Ecwid niet beschikbaar binnen timeout");
+  }
 
-          if (!storeId || !productId) {
-            console.log("No storeId or productId found, skipping...");
-            return;
-          }
+  async function fetchCombinations(storeId, productId) {
+    const url =
+      `https://app.ecwid.com/api/v3/${storeId}/products/${productId}/combinations` +
+      `?responseFields=items(options,inStock,quantity,unlimited)`;
 
-          console.log("storeId", storeId);
-          console.log("productId", productId);
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${PUBLIC_TOKEN}` },
+    });
 
-          // Kleine cache (1 minuut) om API calls te beperken bij re-renders
-          const cacheKey = `ecwid-combos:${storeId}:${productId}`;
-          const cached = sessionStorage.getItem(cacheKey);
-          if (cached) {
-            try {
-              const { t, items } = JSON.parse(cached);
-              if (Date.now() - t < 60_000 && Array.isArray(items)) {
-                applyDisabledMap(buildAvailabilityMap(items));
-                observeAndReapply(() =>
-                  applyDisabledMap(buildAvailabilityMap(items))
-                );
-                return;
-              }
-            } catch (_) {}
-          }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return Array.isArray(data?.items) ? data.items : [];
+  }
 
-          const url =
-            `https://app.ecwid.com/api/v3/${storeId}/products/${productId}/combinations` +
-            `?responseFields=items(options,inStock,quantity,unlimited)`;
+  function buildAvailabilityMap(combinations) {
+    // Map: "S" -> true/false (in stock)
+    const map = new Map();
+    for (const comb of combinations) {
+      const opt = comb?.options?.find((o) => o?.name === OPTION_NAME);
+      if (!opt?.value) continue;
 
-          let items;
-          try {
-            const res = await fetch(url, {
-              headers: { Authorization: `Bearer ${ECWID_PUBLIC_TOKEN}` },
-            });
-            if (!res.ok) return; // fail silently: shop UX > console drama
-            const data = await res.json();
-            items = Array.isArray(data?.items) ? data.items : [];
-            sessionStorage.setItem(
-              cacheKey,
-              JSON.stringify({ t: Date.now(), items })
-            );
-          } catch (_) {
-            return;
-          }
+      const inStock =
+        comb?.unlimited === true ||
+        comb?.inStock === true ||
+        (typeof comb?.quantity === "number" && comb.quantity > 0);
 
-          // Geen variaties/combinations? Dan is er (nog) geen per-variatie voorraad om op te disablen.
-          if (!items.length) {
-            console.log("No items found... skipping...");
-            return;
-          }
+      map.set(opt.value, !!inStock);
+    }
+    return map;
+  }
 
-          const availability = buildAvailabilityMap(items);
-          applyDisabledMap(availability);
-          observeAndReapply(() => applyDisabledMap(availability));
+  function applyDisabledMap(map) {
+    const selector = `input.form-control__radio[name="${CSS.escape(
+      OPTION_NAME
+    )}"]`;
 
-          function buildAvailabilityMap(combinations) {
-            // Map: "S" -> true/false (in stock)
-            const map = new Map();
-            for (const comb of combinations) {
-              const opt = comb?.options?.find((o) => o?.name === OPTION_NAME);
-              if (!opt?.value) continue;
+    const inputs = document.querySelectorAll(selector);
+    if (!inputs.length) return;
 
-              const inStock =
-                comb?.unlimited === true ||
-                comb?.inStock === true ||
-                (typeof comb?.quantity === "number" && comb.quantity > 0);
+    inputs.forEach((input) => {
+      const val = input.value;
+      if (!map.has(val)) return; // onbekend = laat zoals het is
 
-              map.set(opt.value, !!inStock);
-            }
-            return map;
-          }
+      const disabled = map.get(val) === false;
+      input.disabled = disabled;
 
-          function applyDisabledMap(map) {
-            // Jouw inputs: <input class="form-control__radio" name="Size" value="M" ...>
-            const inputs = document.querySelectorAll(
-              `input.form-control__radio[name="${CSS.escape(OPTION_NAME)}"]`
-            );
+      const wrapper =
+        input.closest(".form-control--checkbox-button") ||
+        input.closest(".form-control");
 
-            if (!inputs.length) return;
-
-            inputs.forEach((input) => {
-              const val = input.value;
-              if (!map.has(val)) return; // onbekend = laat zoals het is
-
-              const disabled = map.get(val) === false;
-              input.disabled = disabled;
-
-              const wrapper =
-                input.closest(".form-control--checkbox-button") ||
-                input.closest(".form-control");
-
-              if (wrapper) {
-                wrapper.classList.toggle("ecwid-oos", disabled);
-                wrapper.setAttribute(
-                  "aria-disabled",
-                  disabled ? "true" : "false"
-                );
-              }
-            });
-
-            // Als de huidige selectie out-of-stock is geworden: selecteer de eerste beschikbare
-            const checked = document.querySelector(
-              `input.form-control__radio[name="${CSS.escape(
-                OPTION_NAME
-              )}"]:checked`
-            );
-            if (checked && checked.disabled) {
-              const firstEnabled = Array.from(inputs).find((i) => !i.disabled);
-              if (firstEnabled) firstEnabled.click();
-            }
-          }
-
-          function observeAndReapply(reapply) {
-            // Ecwid kan opties her-renderen; observer zorgt dat disabled state teruggezet wordt
-            let scheduled = false;
-            const schedule = () => {
-              if (scheduled) return;
-              scheduled = true;
-              requestAnimationFrame(() => {
-                scheduled = false;
-                reapply();
-              });
-            };
-
-            const root =
-              document.querySelector(".product-details-size__sizes") ||
-              document.body;
-
-            const obs = new MutationObserver(schedule);
-            obs.observe(root, { subtree: true, childList: true });
-          }
-        })(page);
+      if (wrapper) {
+        wrapper.classList.toggle("ecwid-oos", disabled);
+        wrapper.setAttribute("aria-disabled", disabled ? "true" : "false");
       }
     });
-  });
-});
+
+    // Als huidige selectie nu disabled is: kies eerste beschikbare
+    const checked = document.querySelector(`${selector}:checked`);
+    if (checked && checked.disabled) {
+      const firstEnabled = Array.from(inputs).find((i) => !i.disabled);
+      if (firstEnabled) firstEnabled.click();
+    }
+  }
+
+  let observer = null;
+  function observeAndReapply(reapply) {
+    if (observer) observer.disconnect();
+
+    let scheduled = false;
+    const schedule = () => {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(() => {
+        scheduled = false;
+        reapply();
+      });
+    };
+
+    const root =
+      document.querySelector(".product-details-size__sizes") || document.body;
+
+    observer = new MutationObserver(schedule);
+    observer.observe(root, { subtree: true, childList: true });
+  }
+
+  async function runForProduct(productId) {
+    const storeId = getStoreIdSafe();
+    if (!storeId || !productId) return;
+
+    const cacheKey = `ecwid-combos:${storeId}:${productId}`;
+    const cached = sessionStorage.getItem(cacheKey);
+    if (cached) {
+      try {
+        const { t, items } = JSON.parse(cached);
+        if (Date.now() - t < CACHE_TTL_MS && Array.isArray(items)) {
+          const map = buildAvailabilityMap(items);
+          applyDisabledMap(map);
+          observeAndReapply(() => applyDisabledMap(map));
+          return;
+        }
+      } catch {
+        // ignore cache parse errors
+      }
+    }
+
+    let items = [];
+    try {
+      items = await fetchCombinations(storeId, productId);
+      sessionStorage.setItem(
+        cacheKey,
+        JSON.stringify({ t: Date.now(), items })
+      );
+    } catch {
+      return; // fail silently: UX > console drama
+    }
+
+    // Geen combinations? Dan is er (nog) geen per-variatie voorraad om op te disablen.
+    if (!items.length) return;
+
+    const map = buildAvailabilityMap(items);
+    applyDisabledMap(map);
+    observeAndReapply(() => applyDisabledMap(map));
+  }
+
+  // ===== Init =====
+  (async function init() {
+    await waitForEcwidReady();
+
+    // 1) Als je direct op product-URL binnenkomt, fix meteen (ook als events al geweest zijn)
+    const pidFromUrl = getProductIdFromUrl();
+    if (pidFromUrl) runForProduct(pidFromUrl);
+
+    // 2) En bij elke product page load
+    window.Ecwid.OnPageLoaded.add((page) => {
+      if (page?.type === "PRODUCT" && page?.productId) {
+        runForProduct(page.productId);
+      }
+    });
+  })();
+})();
