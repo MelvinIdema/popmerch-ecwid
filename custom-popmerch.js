@@ -720,20 +720,36 @@ class PopmerchStockManager {
       return false;
     }
 
-    // Process product on initial page load if on product page
-    // Try multiple detection methods since OnPageLoaded might have already fired
+    // Listen for page changes FIRST (most important - this will always work)
+    window.Ecwid.OnPageLoaded.add((page) => {
+      this.handlePageLoaded(page);
+    });
+
+    this.logger.debug("Registered OnPageLoaded event handler");
+
+    // Try immediate detection in case we're already on a product page
     const productId = this.detectCurrentProduct();
     if (productId) {
       this.logger.info(`Initial product page detected: ${productId}`);
       await this.processProduct(productId);
     } else {
-      this.logger.debug("No product detected on initial load");
+      // If immediate detection failed, try again after a delay
+      // This gives Ecwid more time to fully initialize its API
+      this.logger.debug(
+        "No product detected immediately, will retry after delay"
+      );
+      setTimeout(async () => {
+        const retryProductId = this.detectCurrentProduct();
+        if (retryProductId) {
+          this.logger.info(`Product detected on retry: ${retryProductId}`);
+          await this.processProduct(retryProductId);
+        } else {
+          this.logger.debug(
+            "No product detected after retry - waiting for OnPageLoaded event"
+          );
+        }
+      }, 500); // Wait 500ms for Ecwid API to fully initialize
     }
-
-    // Listen for page changes
-    window.Ecwid.OnPageLoaded.add((page) => {
-      this.handlePageLoaded(page);
-    });
 
     this.initialized = true;
     this.logger.info("Initialization complete");
