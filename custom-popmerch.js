@@ -8,11 +8,9 @@
 // ===== Configuration =====
 const CONFIG = {
   storeId: 111654255,
-  storefrontApiBase:
-    "https://eu-fra2-storefront-api.ecwid.com/storefront/api/v1",
+  publicToken: "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf",
   optionName: "Size",
   disabledClass: "ecwid-oos",
-  lang: "nl",
   debug: true, // Set to false in production
 };
 
@@ -58,25 +56,19 @@ function setupFetchInterceptor() {
   log("Fetch interceptor ready");
 }
 
-// ===== Storefront API Client =====
-async function fetchProductData(productId) {
-  log("Fetching product data for:", productId);
+// ===== REST API Client (for combinations with stock data) =====
+async function fetchProductCombinations(productId) {
+  log("Fetching combinations for product:", productId);
 
-  const url = `${CONFIG.storefrontApiBase}/${CONFIG.storeId}/catalog/product`;
+  // Use REST API which returns variations with stock info
+  const url = `https://app.ecwid.com/api/v3/${CONFIG.storeId}/products/${productId}/combinations?responseFields=items(options,inStock,quantity,unlimited)`;
 
   try {
     const response = await fetch(url, {
-      method: "POST",
+      method: "GET",
       headers: {
-        "Content-Type": "application/json",
+        Authorization: `Bearer ${CONFIG.publicToken}`,
       },
-      body: JSON.stringify({
-        lang: CONFIG.lang,
-        productIdentifier: {
-          type: "PUBLISHED",
-          productId: productId,
-        },
-      }),
     });
 
     if (!response.ok) {
@@ -84,39 +76,28 @@ async function fetchProductData(productId) {
     }
 
     const data = await response.json();
-    log("Product data received:", data);
-    return data;
+    log("Combinations received:", data);
+    return data.items || [];
   } catch (error) {
-    logError("Failed to fetch product data:", error);
-    return null;
+    logError("Failed to fetch combinations:", error);
+    return [];
   }
 }
 
 // ===== Build Availability Map =====
-function buildAvailabilityMap(productData) {
+function buildAvailabilityMap(combinations) {
   const map = new Map();
 
-  if (!productData) {
-    log("No product data to build map from");
+  if (!combinations || combinations.length === 0) {
+    log("No combinations to build map from");
     return map;
   }
 
-  // Check if product has variations
-  const variations = productData.variations || productData.combinations || [];
+  log("Processing", combinations.length, "combinations");
 
-  if (variations.length === 0) {
-    log("No variations found in product data");
-    // Try to find variation data in different structure
-    if (productData.product?.variations) {
-      variations.push(...productData.product.variations);
-    }
-  }
-
-  log("Processing", variations.length, "variations");
-
-  for (const variation of variations) {
-    // Find the Size option in this variation
-    const options = variation.options || [];
+  for (const combo of combinations) {
+    // Find the Size option in this combination
+    const options = combo.options || [];
     const sizeOption = options.find((opt) => opt.name === CONFIG.optionName);
 
     if (!sizeOption?.value) continue;
@@ -125,11 +106,9 @@ function buildAvailabilityMap(productData) {
 
     // Determine if in stock
     const inStock =
-      variation.unlimited === true ||
-      variation.quantity > 0 ||
-      variation.inStock === true;
+      combo.unlimited === true || combo.quantity > 0 || combo.inStock === true;
 
-    // If already marked as in stock, keep it (any variation in stock = size available)
+    // If already marked as in stock, keep it (any combination in stock = size available)
     if (map.has(sizeValue)) {
       map.set(sizeValue, map.get(sizeValue) || inStock);
     } else {
@@ -234,16 +213,16 @@ async function processProductOptions(container) {
 
   log("Processing product:", currentProductId);
 
-  // Fetch product data
-  const productData = await fetchProductData(currentProductId);
+  // Fetch combinations (variations with stock data)
+  const combinations = await fetchProductCombinations(currentProductId);
 
-  if (!productData) {
-    log("No product data received");
+  if (!combinations || combinations.length === 0) {
+    log("No combinations received");
     return;
   }
 
   // Build availability map
-  const availabilityMap = buildAvailabilityMap(productData);
+  const availabilityMap = buildAvailabilityMap(combinations);
 
   if (availabilityMap.size === 0) {
     log("No availability data found");
