@@ -11,7 +11,7 @@ const CONFIG = {
   publicToken: "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf",
   optionName: "Size",
   disabledClass: "ecwid-oos",
-  debug: true, // Set to false in production
+  debug: false, // Set to false in production
 };
 
 // ===== State =====
