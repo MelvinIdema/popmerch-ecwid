@@ -59,7 +59,7 @@ const CONFIG = {
   // Logging Configuration
   logging: {
     enabled: true,
-    level: "INFO", // ERROR, WARN, INFO, DEBUG
+    level: "DEBUG", // ERROR, WARN, INFO, DEBUG
     prefix: "[Popmerch Stock]",
   },
 
