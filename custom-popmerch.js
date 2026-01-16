@@ -77,7 +77,7 @@ async function fetchProductCombinations(productId) {
 
     const data = await response.json();
     log("Combinations received:", data);
-    return data.items || [];
+    return Array.isArray(data) ? data : data.items || [];
   } catch (error) {
     logError("Failed to fetch combinations:", error);
     return [];
