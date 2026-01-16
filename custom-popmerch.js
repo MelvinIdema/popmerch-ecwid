@@ -61,7 +61,7 @@ async function fetchProductCombinations(productId) {
   log("Fetching combinations for product:", productId);
 
   // Use REST API which returns variations with stock info
-  const url = `https://app.ecwid.com/api/v3/${CONFIG.storeId}/products/${productId}/combinations?responseFields=items(options,inStock,quantity,unlimited)`;
+  const url = `https://app.ecwid.com/api/v3/${CONFIG.storeId}/products/${productId}/combinations`;
 
   try {
     const response = await fetch(url, {
