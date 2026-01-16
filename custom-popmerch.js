@@ -760,7 +760,63 @@ class PopmerchStockManager {
       this.logger.debug("Exposed global API: window.PopmerchStockManager");
     }
 
+    // CRITICAL FALLBACK: Since OnPageLoaded doesn't seem to fire reliably,
+    // monitor the DOM for product pages appearing
+    this.startProductPageMonitoring();
+
     return true;
+  }
+
+  /**
+   * Start monitoring for product pages (fallback when OnPageLoaded doesn't fire)
+   */
+  startProductPageMonitoring() {
+    this.logger.debug("Starting product page monitoring as fallback");
+
+    let lastProcessedProductId = null;
+    let checkCount = 0;
+    const maxChecks = 20; // Check for 10 seconds (20 * 500ms)
+
+    const checkForProduct = async () => {
+      checkCount++;
+      const productId = this.detectCurrentProduct();
+
+      if (productId && productId !== lastProcessedProductId) {
+        this.logger.info(`🎯 Product detected via monitoring: ${productId}`);
+        lastProcessedProductId = productId;
+        await this.processProduct(productId);
+      }
+
+      // Continue checking for a while after initial load
+      if (checkCount < maxChecks) {
+        setTimeout(checkForProduct, 500);
+      } else {
+        this.logger.debug("Stopped product page monitoring after timeout");
+      }
+    };
+
+    // Start checking
+    checkForProduct();
+
+    // Also monitor DOM changes for product variations appearing
+    const observer = new MutationObserver(() => {
+      const productId = this.detectCurrentProduct();
+      if (productId && productId !== lastProcessedProductId) {
+        this.logger.info(`🎯 Product detected via DOM mutation: ${productId}`);
+        lastProcessedProductId = productId;
+        this.processProduct(productId);
+      }
+    });
+
+    // Observe the entire store container
+    const storeContainer = document.querySelector(".ec-store, body");
+    if (storeContainer) {
+      observer.observe(storeContainer, {
+        childList: true,
+        subtree: true,
+      });
+      this.logger.debug("DOM mutation observer started");
+    }
   }
 
   /**
