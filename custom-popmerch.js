@@ -837,13 +837,19 @@ class PopmerchStockManager {
    * Handle Ecwid page loaded event
    */
   async handlePageLoaded(page) {
-    this.logger.debug("Page loaded event", {
-      type: page?.type,
-      productId: page?.productId,
-    });
+    this.logger.info("🔔 OnPageLoaded event fired!");
+    this.logger.debug("Page data received:", page);
+    this.logger.debug("Page type:", page?.type);
+    this.logger.debug("Page productId:", page?.productId);
+    this.logger.debug("Full page object:", JSON.stringify(page, null, 2));
 
     if (page?.type === "PRODUCT" && page?.productId) {
+      this.logger.info(`✅ Product page detected via event: ${page.productId}`);
       await this.processProduct(page.productId);
+    } else {
+      this.logger.warn(
+        `❌ Page type is "${page?.type}", not PRODUCT. ProductId: ${page?.productId}`
+      );
     }
   }
 
