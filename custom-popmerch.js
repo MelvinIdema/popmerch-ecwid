@@ -721,10 +721,13 @@ class PopmerchStockManager {
     }
 
     // Process product on initial page load if on product page
-    const productIdFromUrl = getProductIdFromUrl();
-    if (productIdFromUrl) {
-      this.logger.info(`Initial product page detected: ${productIdFromUrl}`);
-      await this.processProduct(productIdFromUrl);
+    // Try multiple detection methods since OnPageLoaded might have already fired
+    const productId = this.detectCurrentProduct();
+    if (productId) {
+      this.logger.info(`Initial product page detected: ${productId}`);
+      await this.processProduct(productId);
+    } else {
+      this.logger.debug("No product detected on initial load");
     }
 
     // Listen for page changes
@@ -742,6 +745,76 @@ class PopmerchStockManager {
     }
 
     return true;
+  }
+
+  /**
+   * Detect current product using multiple strategies
+   * This is important because OnPageLoaded might have already fired before our script loaded
+   */
+  detectCurrentProduct() {
+    // Strategy 1: Try URL-based detection
+    const productIdFromUrl = getProductIdFromUrl();
+    if (productIdFromUrl) {
+      this.logger.debug(`Product detected from URL: ${productIdFromUrl}`);
+      return productIdFromUrl;
+    }
+
+    // Strategy 2: Check Ecwid's internal page state
+    try {
+      if (
+        window.Ecwid &&
+        typeof window.Ecwid.getAppPublicConfig === "function"
+      ) {
+        const config = window.Ecwid.getAppPublicConfig();
+        if (config?.page?.type === "PRODUCT" && config?.page?.productId) {
+          this.logger.debug(
+            `Product detected from Ecwid config: ${config.page.productId}`
+          );
+          return config.page.productId;
+        }
+      }
+    } catch (error) {
+      this.logger.debug("Could not get Ecwid app config", error);
+    }
+
+    // Strategy 3: Parse from DOM (Ecwid adds data attributes to product elements)
+    try {
+      const productElement = document.querySelector("[data-product-id]");
+      if (productElement) {
+        const productId = parseInt(
+          productElement.getAttribute("data-product-id"),
+          10
+        );
+        if (productId) {
+          this.logger.debug(`Product detected from DOM: ${productId}`);
+          return productId;
+        }
+      }
+    } catch (error) {
+      this.logger.debug("Could not get product from DOM", error);
+    }
+
+    // Strategy 4: Check if we're on a product details page by looking for specific elements
+    try {
+      const productDetails = document.querySelector(
+        ".ec-store__product-details, .product-details"
+      );
+      if (productDetails) {
+        // Try to extract from URL hash which Ecwid uses for navigation
+        const hash = window.location.hash;
+        const hashMatch = hash.match(/\/p\/(\d+)/i);
+        if (hashMatch) {
+          const productId = parseInt(hashMatch[1], 10);
+          this.logger.debug(`Product detected from URL hash: ${productId}`);
+          return productId;
+        }
+      }
+    } catch (error) {
+      this.logger.debug("Could not parse URL hash", error);
+    }
+
+    this.logger.debug("No product detected using any strategy");
+    return null;
   }
 
   /**
