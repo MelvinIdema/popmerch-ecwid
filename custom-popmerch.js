@@ -1014,8 +1014,23 @@ class PopmerchStockManager {
 
 (async function init() {
   try {
-    const manager = new PopmerchStockManager(CONFIG);
-    await manager.initialize();
+    // CRITICAL FIX: Ecwid requires using OnAPILoaded callback
+    // See: https://api-docs.ecwid.com/reference/ecwidonapiloaded
+
+    // Check if Ecwid object exists at all
+    if (typeof window.Ecwid === "undefined") {
+      console.error("[Popmerch Stock] Ecwid not found on page");
+      return;
+    }
+
+    // Wait for Ecwid API to be fully loaded
+    window.Ecwid.OnAPILoaded.add(async function () {
+      console.log(
+        "[Popmerch Stock] Ecwid API loaded, initializing stock manager"
+      );
+      const manager = new PopmerchStockManager(CONFIG);
+      await manager.initialize();
+    });
   } catch (error) {
     console.error("[Popmerch Stock] Fatal initialization error:", error);
   }
