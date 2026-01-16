@@ -1,178 +1,871 @@
-// ===== Config =====
-const PUBLIC_TOKEN = "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf";
-const OPTION_NAME = "Size"; // matcht name="Size" in je HTML
-const CACHE_TTL_MS = 60_000;
+/**
+ * Popmerch Product Variation Stock Manager
+ *
+ * Production-ready script for managing product variation stock availability in Ecwid storefronts.
+ * Disables variation select buttons when stock is unavailable.
+ *
+ * @version 2.0.0
+ * @author Popmerch
+ * @license MIT
+ */
 
-const POLL_STEP_MS = 50;
-const POLL_TIMEOUT_MS = 10_000;
+// ==========================================
+// CONFIGURATION
+// ==========================================
 
-// ===== Utils =====
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const CONFIG = {
+  // Ecwid API Configuration
+  api: {
+    publicToken: "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf",
+    baseUrl: "https://app.ecwid.com/api/v3",
+    timeout: 10000, // 10 seconds
+    retryAttempts: 3,
+    retryDelay: 1000, // 1 second initial delay, will use exponential backoff
+  },
 
+  // Product Options Configuration
+  options: {
+    targetOptionName: "Size", // The product option to manage (e.g., "Size", "Color")
+    // Add more option names here if you want to manage multiple options:
+    // targetOptionNames: ["Size", "Color"]
+  },
+
+  // Cache Configuration
+  cache: {
+    enabled: true,
+    ttl: 60000, // 60 seconds
+    version: "1.0",
+    keyPrefix: "popmerch:stock",
+  },
+
+  // DOM Configuration
+  dom: {
+    pollInterval: 50, // ms between polls while waiting for Ecwid
+    pollTimeout: 10000, // max wait time for Ecwid to be ready
+    debounceDelay: 100, // ms to debounce DOM mutations
+    observerConfig: {
+      childList: true,
+      subtree: true,
+    },
+  },
+
+  // UI Configuration
+  ui: {
+    disabledClass: "ecwid-oos", // Out of stock class
+    loadingClass: "ecwid-stock-loading",
+    ariaDisabled: true,
+  },
+
+  // Logging Configuration
+  logging: {
+    enabled: true,
+    level: "INFO", // ERROR, WARN, INFO, DEBUG
+    prefix: "[Popmerch Stock]",
+  },
+
+  // Debug Configuration
+  debug: {
+    enableViaUrl: true, // Allow ?debug=true in URL
+    exposeGlobalAPI: true, // Expose window.PopmerchStockManager
+  },
+};
+
+// ==========================================
+// LOGGER
+// ==========================================
+
+/**
+ * Production-ready logging utility with log levels
+ */
+class Logger {
+  static LEVELS = {
+    ERROR: 0,
+    WARN: 1,
+    INFO: 2,
+    DEBUG: 3,
+  };
+
+  constructor(config) {
+    this.config = config;
+    this.level = Logger.LEVELS[config.level] ?? Logger.LEVELS.INFO;
+    this.prefix = config.prefix;
+    this.enabled = config.enabled;
+
+    // Check for debug mode in URL
+    if (CONFIG.debug.enableViaUrl && this.isDebugMode()) {
+      this.level = Logger.LEVELS.DEBUG;
+      this.enabled = true;
+    }
+  }
+
+  /**
+   * Check if debug mode is enabled via URL parameter
+   */
+  isDebugMode() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("debug") === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Log error message
+   */
+  error(message, ...args) {
+    if (this.enabled && this.level >= Logger.LEVELS.ERROR) {
+      console.error(`${this.prefix} [ERROR]`, message, ...args);
+    }
+  }
+
+  /**
+   * Log warning message
+   */
+  warn(message, ...args) {
+    if (this.enabled && this.level >= Logger.LEVELS.WARN) {
+      console.warn(`${this.prefix} [WARN]`, message, ...args);
+    }
+  }
+
+  /**
+   * Log info message
+   */
+  info(message, ...args) {
+    if (this.enabled && this.level >= Logger.LEVELS.INFO) {
+      console.info(`${this.prefix} [INFO]`, message, ...args);
+    }
+  }
+
+  /**
+   * Log debug message
+   */
+  debug(message, ...args) {
+    if (this.enabled && this.level >= Logger.LEVELS.DEBUG) {
+      console.log(`${this.prefix} [DEBUG]`, message, ...args);
+    }
+  }
+
+  /**
+   * Log performance timing
+   */
+  time(label) {
+    if (this.enabled && this.level >= Logger.LEVELS.DEBUG) {
+      console.time(`${this.prefix} ${label}`);
+    }
+  }
+
+  /**
+   * End performance timing
+   */
+  timeEnd(label) {
+    if (this.enabled && this.level >= Logger.LEVELS.DEBUG) {
+      console.timeEnd(`${this.prefix} ${label}`);
+    }
+  }
+}
+
+// ==========================================
+// UTILITY FUNCTIONS
+// ==========================================
+
+/**
+ * Sleep utility for async code
+ */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Debounce function to limit execution rate
+ */
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
+
+/**
+ * Safely get Ecwid store ID
+ */
 function getStoreIdSafe() {
   try {
     const id = window.Ecwid?.getOwnerId?.();
     return typeof id === "number" && id > 0 ? id : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Extract product ID from URL
+ */
+function getProductIdFromUrl() {
+  try {
+    const path = window.location.pathname || "";
+    // Match patterns like "...-p800716701" or "/p800716701"
+    const match = path.match(/-p(\d+)\b/i) || path.match(/\/p(\d+)\b/i);
+    return match ? Number(match[1]) : null;
   } catch {
     return null;
   }
 }
 
-function getProductIdFromUrl() {
-  // Ecwid product urls bevatten vaak "...-p800716701"
-  const path = window.location.pathname || "";
-  const m = path.match(/-p(\d+)\b/i) || path.match(/\/p(\d+)\b/i);
-  return m ? Number(m[1]) : null;
-}
+/**
+ * Wait for Ecwid to be ready
+ */
+async function waitForEcwidReady(config, logger) {
+  const startTime = Date.now();
+  logger.debug("Waiting for Ecwid to be ready...");
 
-async function waitForEcwidReady() {
-  const start = Date.now();
-  while (Date.now() - start < POLL_TIMEOUT_MS) {
-    const ok =
+  while (Date.now() - startTime < config.pollTimeout) {
+    const isReady =
       window.Ecwid &&
       typeof window.Ecwid.OnPageLoaded?.add === "function" &&
       typeof window.Ecwid.getOwnerId === "function" &&
       getStoreIdSafe();
 
-    if (ok) return;
-    await sleep(POLL_STEP_MS);
-  }
-  console.warn("[popmerch] Ecwid niet beschikbaar binnen timeout");
-}
-
-async function fetchCombinations(storeId, productId) {
-  const url =
-    `https://app.ecwid.com/api/v3/${storeId}/products/${productId}/combinations` +
-    `?responseFields=items(options,inStock,quantity,unlimited)`;
-
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${PUBLIC_TOKEN}` },
-  });
-
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  return Array.isArray(data?.items) ? data.items : [];
-}
-
-function buildAvailabilityMap(combinations) {
-  // Map: "S" -> true/false (in stock)
-  const map = new Map();
-  for (const comb of combinations) {
-    const opt = comb?.options?.find((o) => o?.name === OPTION_NAME);
-    if (!opt?.value) continue;
-
-    const inStock =
-      comb?.unlimited === true ||
-      comb?.inStock === true ||
-      (typeof comb?.quantity === "number" && comb.quantity > 0);
-
-    map.set(opt.value, !!inStock);
-  }
-  return map;
-}
-
-function applyDisabledMap(map) {
-  const selector = `input.form-control__radio[name="${CSS.escape(
-    OPTION_NAME
-  )}"]`;
-
-  const inputs = document.querySelectorAll(selector);
-  if (!inputs.length) return;
-
-  inputs.forEach((input) => {
-    const val = input.value;
-    if (!map.has(val)) return; // onbekend = laat zoals het is
-
-    const disabled = map.get(val) === false;
-    input.disabled = disabled;
-
-    const wrapper =
-      input.closest(".form-control--checkbox-button") ||
-      input.closest(".form-control");
-
-    if (wrapper) {
-      wrapper.classList.toggle("ecwid-oos", disabled);
-      wrapper.setAttribute("aria-disabled", disabled ? "true" : "false");
+    if (isReady) {
+      logger.debug("Ecwid is ready");
+      return true;
     }
-  });
 
-  // Als huidige selectie nu disabled is: kies eerste beschikbare
-  const checked = document.querySelector(`${selector}:checked`);
-  if (checked && checked.disabled) {
-    const firstEnabled = Array.from(inputs).find((i) => !i.disabled);
-    if (firstEnabled) firstEnabled.click();
+    await sleep(config.pollInterval);
+  }
+
+  logger.warn(`Ecwid not ready within ${config.pollTimeout}ms timeout`);
+  return false;
+}
+
+// ==========================================
+// ECWID API CLIENT
+// ==========================================
+
+/**
+ * Client for interacting with Ecwid REST API
+ */
+class EcwidAPIClient {
+  constructor(config, logger) {
+    this.config = config;
+    this.logger = logger;
+  }
+
+  /**
+   * Fetch product combinations from Ecwid API with retry logic
+   */
+  async fetchCombinations(storeId, productId) {
+    const url =
+      `${this.config.api.baseUrl}/${storeId}/products/${productId}/combinations` +
+      `?responseFields=items(id,options,inStock,quantity,unlimited)`;
+
+    this.logger.debug(`Fetching combinations for product ${productId}`, {
+      url,
+    });
+
+    let lastError;
+    for (let attempt = 1; attempt <= this.config.api.retryAttempts; attempt++) {
+      try {
+        const response = await this.fetchWithTimeout(url, {
+          headers: {
+            Authorization: `Bearer ${this.config.api.publicToken}`,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        const items = Array.isArray(data?.items) ? data.items : [];
+
+        this.logger.info(
+          `Successfully fetched ${items.length} combinations for product ${productId}`
+        );
+        return items;
+      } catch (error) {
+        lastError = error;
+        this.logger.warn(
+          `Attempt ${attempt}/${this.config.api.retryAttempts} failed:`,
+          error.message
+        );
+
+        // Don't retry on 4xx errors (client errors)
+        if (error.message.includes("HTTP 4")) {
+          break;
+        }
+
+        // Exponential backoff: wait before retrying
+        if (attempt < this.config.api.retryAttempts) {
+          const delay = this.config.api.retryDelay * Math.pow(2, attempt - 1);
+          this.logger.debug(`Retrying in ${delay}ms...`);
+          await sleep(delay);
+        }
+      }
+    }
+
+    this.logger.error(
+      "Failed to fetch combinations after all retry attempts",
+      lastError
+    );
+    throw lastError;
+  }
+
+  /**
+   * Fetch with timeout
+   */
+  async fetchWithTimeout(url, options) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      this.config.api.timeout
+    );
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === "AbortError") {
+        throw new Error(`Request timeout after ${this.config.api.timeout}ms`);
+      }
+      throw error;
+    }
   }
 }
 
-let observer = null;
-function observeAndReapply(reapply) {
-  if (observer) observer.disconnect();
+// ==========================================
+// STOCK MANAGER
+// ==========================================
 
-  let scheduled = false;
-  const schedule = () => {
-    if (scheduled) return;
-    scheduled = true;
-    requestAnimationFrame(() => {
-      scheduled = false;
-      reapply();
-    });
-  };
+/**
+ * Manages product stock availability logic
+ */
+class StockManager {
+  constructor(config, logger) {
+    this.config = config;
+    this.logger = logger;
+    this.cache = new Map();
+  }
 
-  const root =
-    document.querySelector(".product-details-size__sizes") || document.body;
+  /**
+   * Get cache key for a product
+   */
+  getCacheKey(storeId, productId) {
+    return `${this.config.cache.keyPrefix}:v${this.config.cache.version}:${storeId}:${productId}`;
+  }
 
-  observer = new MutationObserver(schedule);
-  observer.observe(root, { subtree: true, childList: true });
+  /**
+   * Get cached combinations if available and valid
+   */
+  getCachedCombinations(storeId, productId) {
+    if (!this.config.cache.enabled) {
+      return null;
+    }
+
+    const cacheKey = this.getCacheKey(storeId, productId);
+
+    // Try session storage first
+    try {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        const { timestamp, items, version } = JSON.parse(cached);
+        const age = Date.now() - timestamp;
+
+        if (
+          age < this.config.cache.ttl &&
+          version === this.config.cache.version
+        ) {
+          this.logger.debug(
+            `Cache hit for product ${productId} (age: ${age}ms)`
+          );
+          return Array.isArray(items) ? items : null;
+        }
+
+        this.logger.debug(
+          `Cache expired for product ${productId} (age: ${age}ms)`
+        );
+      }
+    } catch (error) {
+      this.logger.warn("Failed to read cache from sessionStorage", error);
+    }
+
+    // Try memory cache
+    const memCached = this.cache.get(cacheKey);
+    if (memCached) {
+      const age = Date.now() - memCached.timestamp;
+      if (age < this.config.cache.ttl) {
+        this.logger.debug(
+          `Memory cache hit for product ${productId} (age: ${age}ms)`
+        );
+        return memCached.items;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Cache combinations
+   */
+  cacheCombinations(storeId, productId, items) {
+    if (!this.config.cache.enabled) {
+      return;
+    }
+
+    const cacheKey = this.getCacheKey(storeId, productId);
+    const cacheData = {
+      timestamp: Date.now(),
+      items,
+      version: this.config.cache.version,
+    };
+
+    // Store in session storage
+    try {
+      sessionStorage.setItem(cacheKey, JSON.stringify(cacheData));
+      this.logger.debug(
+        `Cached ${items.length} combinations for product ${productId}`
+      );
+    } catch (error) {
+      this.logger.warn("Failed to write cache to sessionStorage", error);
+    }
+
+    // Store in memory cache as fallback
+    this.cache.set(cacheKey, cacheData);
+  }
+
+  /**
+   * Build availability map from combinations
+   * Maps option value -> boolean (in stock or not)
+   */
+  buildAvailabilityMap(combinations, optionName) {
+    const availabilityMap = new Map();
+
+    this.logger.debug(
+      `Building availability map for ${combinations.length} combinations, option: ${optionName}`
+    );
+
+    for (const combination of combinations) {
+      // Find the option that matches our target option name
+      const option = combination?.options?.find(
+        (opt) => opt?.name === optionName
+      );
+
+      if (!option?.value) {
+        continue;
+      }
+
+      const optionValue = option.value;
+
+      // Determine if this combination is in stock
+      const inStock = this.isInStock(combination);
+
+      // If we already have this option value and it was in stock, keep it as in stock
+      // This handles cases where multiple combinations exist for the same option value
+      if (availabilityMap.has(optionValue)) {
+        const currentStock = availabilityMap.get(optionValue);
+        availabilityMap.set(optionValue, currentStock || inStock);
+      } else {
+        availabilityMap.set(optionValue, inStock);
+      }
+
+      this.logger.debug(
+        `Option "${optionValue}": ${inStock ? "IN STOCK" : "OUT OF STOCK"}`,
+        {
+          unlimited: combination.unlimited,
+          quantity: combination.quantity,
+          inStock: combination.inStock,
+        }
+      );
+    }
+
+    this.logger.info(
+      `Availability map built: ${availabilityMap.size} options, ` +
+        `${
+          Array.from(availabilityMap.values()).filter(Boolean).length
+        } in stock`
+    );
+
+    return availabilityMap;
+  }
+
+  /**
+   * Determine if a combination is in stock
+   */
+  isInStock(combination) {
+    // Check unlimited flag first
+    if (combination.unlimited === true) {
+      return true;
+    }
+
+    // Check quantity
+    if (typeof combination.quantity === "number" && combination.quantity > 0) {
+      return true;
+    }
+
+    // Check inStock flag as fallback
+    if (combination.inStock === true) {
+      return true;
+    }
+
+    return false;
+  }
 }
 
-async function runForProduct(productId) {
-  const storeId = getStoreIdSafe();
-  if (!storeId || !productId) return;
+// ==========================================
+// DOM MANAGER
+// ==========================================
 
-  const cacheKey = `ecwid-combos:${storeId}:${productId}`;
-  const cached = sessionStorage.getItem(cacheKey);
-  if (cached) {
-    try {
-      const { t, items } = JSON.parse(cached);
-      if (Date.now() - t < CACHE_TTL_MS && Array.isArray(items)) {
-        const map = buildAvailabilityMap(items);
-        applyDisabledMap(map);
-        observeAndReapply(() => applyDisabledMap(map));
+/**
+ * Manages DOM manipulation and observation
+ */
+class DOMManager {
+  constructor(config, logger) {
+    this.config = config;
+    this.logger = logger;
+    this.observer = null;
+    this.currentAvailabilityMap = null;
+    this.currentOptionName = null;
+  }
+
+  /**
+   * Find all variation input elements for a given option name
+   */
+  findVariationInputs(optionName) {
+    const escapedName = CSS.escape(optionName);
+    const selector = `input.form-control__radio[name="${escapedName}"]`;
+    const inputs = document.querySelectorAll(selector);
+
+    this.logger.debug(
+      `Found ${inputs.length} variation inputs for option "${optionName}"`,
+      { selector }
+    );
+
+    return inputs;
+  }
+
+  /**
+   * Apply stock-based disabled states to variation inputs
+   */
+  applyStockStatus(availabilityMap, optionName) {
+    this.logger.time("Apply stock status");
+
+    const inputs = this.findVariationInputs(optionName);
+
+    if (!inputs.length) {
+      this.logger.warn(`No variation inputs found for option "${optionName}"`);
+      this.logger.timeEnd("Apply stock status");
+      return;
+    }
+
+    let disabledCount = 0;
+    let enabledCount = 0;
+
+    inputs.forEach((input) => {
+      const value = input.value;
+
+      // If we don't have stock info for this value, leave it as-is
+      if (!availabilityMap.has(value)) {
+        this.logger.debug(`No stock info for "${value}", leaving unchanged`);
         return;
       }
-    } catch {
-      // ignore cache parse errors
+
+      const inStock = availabilityMap.get(value);
+      const shouldDisable = !inStock;
+
+      // Update input disabled state
+      input.disabled = shouldDisable;
+
+      // Update wrapper element classes and ARIA attributes
+      const wrapper =
+        input.closest(".form-control--checkbox-button") ||
+        input.closest(".form-control");
+
+      if (wrapper) {
+        wrapper.classList.toggle(this.config.ui.disabledClass, shouldDisable);
+
+        if (this.config.ui.ariaDisabled) {
+          wrapper.setAttribute(
+            "aria-disabled",
+            shouldDisable ? "true" : "false"
+          );
+        }
+      }
+
+      if (shouldDisable) {
+        disabledCount++;
+      } else {
+        enabledCount++;
+      }
+    });
+
+    this.logger.info(
+      `Applied stock status: ${enabledCount} enabled, ${disabledCount} disabled`
+    );
+
+    // Auto-select first available option if current selection is disabled
+    this.autoSelectAvailableOption(inputs);
+
+    this.logger.timeEnd("Apply stock status");
+  }
+
+  /**
+   * Auto-select first available option if current selection is disabled
+   */
+  autoSelectAvailableOption(inputs) {
+    const checkedInput = Array.from(inputs).find((input) => input.checked);
+
+    if (checkedInput && checkedInput.disabled) {
+      this.logger.info(
+        `Current selection "${checkedInput.value}" is disabled, auto-selecting first available`
+      );
+
+      const firstEnabled = Array.from(inputs).find((input) => !input.disabled);
+
+      if (firstEnabled) {
+        firstEnabled.click();
+        this.logger.info(`Auto-selected "${firstEnabled.value}"`);
+      } else {
+        this.logger.warn("No available options to auto-select");
+      }
     }
   }
 
-  let items = [];
-  try {
-    items = await fetchCombinations(storeId, productId);
-    sessionStorage.setItem(cacheKey, JSON.stringify({ t: Date.now(), items }));
-  } catch {
-    return; // fail silently: UX > console drama
+  /**
+   * Start observing DOM changes and reapply stock status when needed
+   */
+  startObserving(availabilityMap, optionName) {
+    // Store current map and option for reapplication
+    this.currentAvailabilityMap = availabilityMap;
+    this.currentOptionName = optionName;
+
+    // Disconnect existing observer if any
+    this.stopObserving();
+
+    // Create debounced reapply function
+    const debouncedReapply = debounce(() => {
+      if (this.currentAvailabilityMap && this.currentOptionName) {
+        this.logger.debug("DOM changed, reapplying stock status");
+        this.applyStockStatus(
+          this.currentAvailabilityMap,
+          this.currentOptionName
+        );
+      }
+    }, this.config.dom.debounceDelay);
+
+    // Find the container to observe
+    const container =
+      document.querySelector(".product-details-size__sizes") ||
+      document.querySelector(".ec-store") ||
+      document.body;
+
+    this.logger.debug("Starting DOM observation", {
+      container: container.className || "body",
+    });
+
+    // Create and start observer
+    this.observer = new MutationObserver(() => {
+      debouncedReapply();
+    });
+
+    this.observer.observe(container, this.config.dom.observerConfig);
   }
 
-  // Geen combinations? Dan is er (nog) geen per-variatie voorraad om op te disablen.
-  if (!items.length) return;
-
-  const map = buildAvailabilityMap(items);
-  applyDisabledMap(map);
-  observeAndReapply(() => applyDisabledMap(map));
+  /**
+   * Stop observing DOM changes
+   */
+  stopObserving() {
+    if (this.observer) {
+      this.observer.disconnect();
+      this.observer = null;
+      this.logger.debug("Stopped DOM observation");
+    }
+  }
 }
 
-// ===== Init =====
-(async function init() {
-  await waitForEcwidReady();
+// ==========================================
+// MAIN APPLICATION
+// ==========================================
 
-  // 1) Als je direct op product-URL binnenkomt, fix meteen (ook als events al geweest zijn)
-  const pidFromUrl = getProductIdFromUrl();
-  if (pidFromUrl) runForProduct(pidFromUrl);
+/**
+ * Main application controller
+ */
+class PopmerchStockManager {
+  constructor(config) {
+    this.config = config;
+    this.logger = new Logger(config.logging);
+    this.apiClient = new EcwidAPIClient(config, this.logger);
+    this.stockManager = new StockManager(config, this.logger);
+    this.domManager = new DOMManager(config, this.logger);
+    this.initialized = false;
+  }
 
-  // 2) En bij elke product page load
-  window.Ecwid.OnPageLoaded.add((page) => {
-    if (page?.type === "PRODUCT" && page?.productId) {
-      runForProduct(page.productId);
+  /**
+   * Initialize the stock manager
+   */
+  async initialize() {
+    this.logger.info("Initializing Popmerch Stock Manager v2.0.0");
+
+    // Wait for Ecwid to be ready
+    const ecwidReady = await waitForEcwidReady(this.config.dom, this.logger);
+    if (!ecwidReady) {
+      this.logger.error("Failed to initialize: Ecwid not ready");
+      return false;
     }
-  });
+
+    // Process product on initial page load if on product page
+    const productIdFromUrl = getProductIdFromUrl();
+    if (productIdFromUrl) {
+      this.logger.info(`Initial product page detected: ${productIdFromUrl}`);
+      await this.processProduct(productIdFromUrl);
+    }
+
+    // Listen for page changes
+    window.Ecwid.OnPageLoaded.add((page) => {
+      this.handlePageLoaded(page);
+    });
+
+    this.initialized = true;
+    this.logger.info("Initialization complete");
+
+    // Expose global API if configured
+    if (this.config.debug.exposeGlobalAPI) {
+      window.PopmerchStockManager = this;
+      this.logger.debug("Exposed global API: window.PopmerchStockManager");
+    }
+
+    return true;
+  }
+
+  /**
+   * Handle Ecwid page loaded event
+   */
+  async handlePageLoaded(page) {
+    this.logger.debug("Page loaded event", {
+      type: page?.type,
+      productId: page?.productId,
+    });
+
+    if (page?.type === "PRODUCT" && page?.productId) {
+      await this.processProduct(page.productId);
+    }
+  }
+
+  /**
+   * Process a product page
+   */
+  async processProduct(productId) {
+    this.logger.info(`Processing product ${productId}`);
+    this.logger.time(`Process product ${productId}`);
+
+    try {
+      // Get store ID
+      const storeId = getStoreIdSafe();
+      if (!storeId) {
+        this.logger.error("Store ID not available");
+        return;
+      }
+
+      // Check cache first
+      let combinations = this.stockManager.getCachedCombinations(
+        storeId,
+        productId
+      );
+
+      // Fetch from API if not cached
+      if (!combinations) {
+        try {
+          combinations = await this.apiClient.fetchCombinations(
+            storeId,
+            productId
+          );
+          this.stockManager.cacheCombinations(storeId, productId, combinations);
+        } catch (error) {
+          this.logger.error(
+            "Failed to fetch combinations, failing silently",
+            error
+          );
+          return; // Fail gracefully, don't break the page
+        }
+      }
+
+      // If no combinations, nothing to disable
+      if (!combinations || combinations.length === 0) {
+        this.logger.info("No combinations found, nothing to disable");
+        return;
+      }
+
+      // Build availability map and apply to DOM
+      const optionName = this.config.options.targetOptionName;
+      const availabilityMap = this.stockManager.buildAvailabilityMap(
+        combinations,
+        optionName
+      );
+
+      // Apply stock status
+      this.domManager.applyStockStatus(availabilityMap, optionName);
+
+      // Start observing for DOM changes
+      this.domManager.startObserving(availabilityMap, optionName);
+
+      this.logger.timeEnd(`Process product ${productId}`);
+    } catch (error) {
+      this.logger.error(`Error processing product ${productId}`, error);
+      this.logger.timeEnd(`Process product ${productId}`);
+    }
+  }
+
+  /**
+   * Manually refresh stock status for current product
+   * Useful for debugging or forced refresh
+   */
+  async refresh() {
+    this.logger.info("Manual refresh triggered");
+    const productId = getProductIdFromUrl();
+    if (productId) {
+      // Clear cache for this product
+      const storeId = getStoreIdSafe();
+      if (storeId) {
+        const cacheKey = this.stockManager.getCacheKey(storeId, productId);
+        sessionStorage.removeItem(cacheKey);
+        this.stockManager.cache.delete(cacheKey);
+      }
+      // Reprocess
+      await this.processProduct(productId);
+    }
+  }
+
+  /**
+   * Get current status for debugging
+   */
+  getStatus() {
+    return {
+      initialized: this.initialized,
+      storeId: getStoreIdSafe(),
+      productId: getProductIdFromUrl(),
+      cacheSize: this.stockManager.cache.size,
+      observing: this.domManager.observer !== null,
+      config: this.config,
+    };
+  }
+}
+
+// ==========================================
+// INITIALIZATION
+// ==========================================
+
+(async function init() {
+  try {
+    const manager = new PopmerchStockManager(CONFIG);
+    await manager.initialize();
+  } catch (error) {
+    console.error("[Popmerch Stock] Fatal initialization error:", error);
+  }
 })();
