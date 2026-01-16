@@ -239,7 +239,40 @@ async function processProductOptions(container) {
 function extractProductIdFromPage() {
   // Try various methods to get product ID
 
-  // Method 1: Look for data-product-id attribute
+  // Method 1: Look for productBrowser class with product ID (most reliable for SPA navigation)
+  const productBrowser = document.querySelector(
+    '[class*="ecwid-productBrowser-ProductPage-"]'
+  );
+  if (productBrowser) {
+    const match = productBrowser.className.match(
+      /ecwid-productBrowser-ProductPage-(\d+)/
+    );
+    if (match) {
+      const id = parseInt(match[1], 10);
+      if (id) {
+        log("Found product ID from productBrowser class:", id);
+        return id;
+      }
+    }
+  }
+
+  // Method 2: Look for ec-store__product-page-- class
+  const storePage = document.querySelector(
+    '[class*="ec-store__product-page--c"]'
+  );
+  if (storePage) {
+    // Extract from class like "ec-store__product-page--800716701"
+    const match = storePage.className.match(/ec-store__product-page--(\d{5,})/);
+    if (match) {
+      const id = parseInt(match[1], 10);
+      if (id) {
+        log("Found product ID from ec-store class:", id);
+        return id;
+      }
+    }
+  }
+
+  // Method 3: Look for data-product-id attribute
   const productElement = document.querySelector("[data-product-id]");
   if (productElement) {
     const id = parseInt(productElement.getAttribute("data-product-id"), 10);
@@ -249,7 +282,7 @@ function extractProductIdFromPage() {
     }
   }
 
-  // Method 2: Look in page scripts for product ID
+  // Method 4: Look in page scripts for product ID
   const scripts = document.querySelectorAll("script");
   for (const script of scripts) {
     const match = script.textContent?.match(/productId['":\s]+(\d+)/);
@@ -262,7 +295,7 @@ function extractProductIdFromPage() {
     }
   }
 
-  // Method 3: Try window object
+  // Method 5: Try window object
   if (window.ec?.config?.product?.productId) {
     log("Found product ID from window.ec:", window.ec.config.product.productId);
     return window.ec.config.product.productId;
