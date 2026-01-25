@@ -9,6 +9,7 @@
 const CONFIG = {
   storeId: 111654255,
   publicToken: "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf",
+  optionName: "Size",
   disabledClass: "ecwid-oos",
   debug: false, // Set to false in production
 };
@@ -85,7 +86,6 @@ async function fetchProductCombinations(productId) {
 
 // ===== Build Availability Map =====
 function buildAvailabilityMap(combinations) {
-  // Map<OptionName, Map<OptionValue, InStock>>
   const map = new Map();
 
   if (!combinations || combinations.length === 0) {
@@ -96,120 +96,97 @@ function buildAvailabilityMap(combinations) {
   log("Processing", combinations.length, "combinations");
 
   for (const combo of combinations) {
+    // Find the Size option in this combination
     const options = combo.options || [];
+    const sizeOption = options.find((opt) => opt.name === CONFIG.optionName);
+
+    if (!sizeOption?.value) continue;
+
+    const sizeValue = sizeOption.value;
 
     // Determine if in stock
     const inStock =
       combo.unlimited === true || combo.quantity > 0 || combo.inStock === true;
 
-    for (const opt of options) {
-      const optionName = opt.name;
-      const optionValue = opt.value;
-
-      if (!optionName || !optionValue) continue;
-
-      if (!map.has(optionName)) {
-        map.set(optionName, new Map());
-      }
-
-      const optionMap = map.get(optionName);
-
-      // If already marked as in stock, keep it (any combination in stock = value available)
-      if (optionMap.has(optionValue)) {
-        optionMap.set(optionValue, optionMap.get(optionValue) || inStock);
-      } else {
-        optionMap.set(optionValue, inStock);
-      }
+    // If already marked as in stock, keep it (any combination in stock = size available)
+    if (map.has(sizeValue)) {
+      map.set(sizeValue, map.get(sizeValue) || inStock);
+    } else {
+      map.set(sizeValue, inStock);
     }
+
+    log(`Size "${sizeValue}": ${inStock ? "IN STOCK" : "OUT OF STOCK"}`);
   }
 
-  // Debug logging
-  if (CONFIG.debug) {
-    const debugObj = {};
-    for (const [name, values] of map.entries()) {
-      debugObj[name] = Object.fromEntries(values);
-    }
-    log("Availability map:", debugObj);
-  }
-
+  log("Availability map:", Object.fromEntries(map));
   return map;
 }
 
 // ===== Apply Stock Status to DOM =====
 function applyStockStatus(availabilityMap) {
-  log("Applying stock status to DOM");
+  const selector = `input.form-control__radio[name="${CSS.escape(
+    CONFIG.optionName
+  )}"]`;
+  const inputs = document.querySelectorAll(selector);
 
-  for (const [optionName, valuesMap] of availabilityMap.entries()) {
-    // Select inputs for this specific option name
-    const selector = `input.form-control__radio[name="${CSS.escape(
-      optionName,
-    )}"]`;
-    const inputs = document.querySelectorAll(selector);
+  if (!inputs.length) {
+    log("No option inputs found");
+    return;
+  }
 
-    if (!inputs.length) {
-      log(`No inputs found for option "${optionName}"`);
-      continue;
+  log("Applying stock status to", inputs.length, "inputs");
+
+  let disabledCount = 0;
+
+  inputs.forEach((input) => {
+    const value = input.value;
+
+    if (!availabilityMap.has(value)) {
+      log(`No stock info for "${value}", leaving as-is`);
+      return;
     }
 
-    log(`Applying status to option "${optionName}" (${inputs.length} inputs)`);
+    const inStock = availabilityMap.get(value);
+    const shouldDisable = !inStock;
 
-    let disabledCount = 0;
+    // Apply disabled state
+    input.disabled = shouldDisable;
 
-    inputs.forEach((input) => {
-      const value = input.value;
+    // Find wrapper and apply class
+    const wrapper =
+      input.closest(".form-control--checkbox-button") ||
+      input.closest(".form-control");
 
-      if (!valuesMap.has(value)) {
-        log(`No stock info for "${optionName}: ${value}", leaving as-is`);
-        return;
-      }
+    if (wrapper) {
+      wrapper.classList.toggle(CONFIG.disabledClass, shouldDisable);
+      wrapper.setAttribute("aria-disabled", shouldDisable ? "true" : "false");
+    }
 
-      const inStock = valuesMap.get(value);
-      const shouldDisable = !inStock;
+    if (shouldDisable) {
+      disabledCount++;
+      log(`Disabled: ${value}`);
+    }
+  });
 
-      // Apply disabled state
-      input.disabled = shouldDisable;
+  log(
+    `Applied: ${disabledCount} disabled, ${
+      inputs.length - disabledCount
+    } enabled`
+  );
 
-      // Find wrapper and apply class
-      const wrapper =
-        input.closest(".form-control--checkbox-button") ||
-        input.closest(".form-control");
-
-      if (wrapper) {
-        wrapper.classList.toggle(CONFIG.disabledClass, shouldDisable);
-        wrapper.setAttribute("aria-disabled", shouldDisable ? "true" : "false");
-      }
-
-      if (shouldDisable) {
-        disabledCount++;
-      }
-    });
-
-    log(
-      `Option "${optionName}": ${disabledCount} disabled, ${
-        inputs.length - disabledCount
-      } enabled`,
-    );
-
-    // Auto-select first available for this option group
-    autoSelectFirstAvailable(inputs, optionName);
-  }
+  // Auto-select first available if current is disabled
+  autoSelectFirstAvailable(inputs);
 }
 
 // ===== Auto-select First Available =====
-function autoSelectFirstAvailable(inputs, optionName) {
+function autoSelectFirstAvailable(inputs) {
   const checked = Array.from(inputs).find((i) => i.checked);
 
-  // If nothing selected OR selected is disabled
-  if (!checked || (checked && checked.disabled)) {
+  if (checked && checked.disabled) {
     const firstEnabled = Array.from(inputs).find((i) => !i.disabled);
     if (firstEnabled) {
-      log(
-        `Auto-selecting first available for "${optionName}":`,
-        firstEnabled.value,
-      );
+      log("Auto-selecting:", firstEnabled.value);
       firstEnabled.click();
-    } else {
-      log(`No enabled options found for "${optionName}" to auto-select`);
     }
   }
 }
@@ -264,11 +241,11 @@ function extractProductIdFromPage() {
 
   // Method 1: Look for productBrowser class with product ID (most reliable for SPA navigation)
   const productBrowser = document.querySelector(
-    '[class*="ecwid-productBrowser-ProductPage-"]',
+    '[class*="ecwid-productBrowser-ProductPage-"]'
   );
   if (productBrowser) {
     const match = productBrowser.className.match(
-      /ecwid-productBrowser-ProductPage-(\d+)/,
+      /ecwid-productBrowser-ProductPage-(\d+)/
     );
     if (match) {
       const id = parseInt(match[1], 10);
@@ -281,7 +258,7 @@ function extractProductIdFromPage() {
 
   // Method 2: Look for ec-store__product-page-- class
   const storePage = document.querySelector(
-    '[class*="ec-store__product-page--c"]',
+    '[class*="ec-store__product-page--c"]'
   );
   if (storePage) {
     // Extract from class like "ec-store__product-page--800716701"
@@ -333,7 +310,7 @@ function setupDOMObserver() {
   const observer = new MutationObserver(() => {
     // Look for product options container
     const container = document.querySelector(
-      ".product-details__product-options",
+      ".product-details__product-options"
     );
 
     if (container && !processedContainers.has(container)) {
@@ -356,7 +333,7 @@ function setupDOMObserver() {
 
   // Also check immediately in case container already exists
   const existingContainer = document.querySelector(
-    ".product-details__product-options",
+    ".product-details__product-options"
   );
   if (existingContainer && !processedContainers.has(existingContainer)) {
     log("Found existing product options container");
