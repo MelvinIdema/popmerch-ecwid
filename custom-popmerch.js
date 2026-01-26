@@ -461,6 +461,8 @@ function setupLocalizedRouting() {
             "product-page", // often in query params or hash
             "category-page",
             "/store",
+            "/products",
+            "/categories",
           ];
 
           if (ecwidRoutes.some((route) => targetPath.includes(route))) {
@@ -533,8 +535,8 @@ function setupLocalizedRouting() {
   // Setup Localized Routing (New)
   // Ensure Ecwid object exists or wait for it?
   // Usually custom js runs after Ecwid.js, but to be safe:
-  // Setup Localized Routing (New)
-  setupLocalizedRouting();
+  // Setup Localized Navigation (Click Interceptor)
+  setupLocalizedNavigationInterceptor();
 
   // Then setup DOM observer
   if (document.readyState === "loading") {
