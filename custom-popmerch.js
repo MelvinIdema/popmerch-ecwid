@@ -436,6 +436,18 @@ function setupLocalizedRouting() {
             return;
           }
 
+          // Skip links inside Ecwid widgets to prevent breaking SPA/Popups
+          // Ecwid handles its own routing; changing hrefs can break it or trigger "modal" fallbacks
+          if (
+            link.closest(".ecwid-productBrowser") ||
+            link.closest(".ec-store") ||
+            link.closest(".ec-minicart") ||
+            link.closest(`[id^="my-store-"]`)
+          ) {
+            // logRouting("Skipping (Ecwid internal):", href);
+            return;
+          }
+
           // Rewrite
           const newPath = `${langPrefix}${targetPath}`;
           logRouting(`Rewriting: ${href} -> ${newPath}`);
