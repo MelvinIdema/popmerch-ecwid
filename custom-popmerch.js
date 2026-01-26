@@ -11,6 +11,7 @@ const CONFIG = {
   publicToken: "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf",
   disabledClass: "ecwid-oos",
   debug: false, // Set to false in production
+  debugRouting: true, // Enable for routing debugging
 };
 
 // ===== State =====
@@ -369,98 +370,131 @@ function setupDOMObserver() {
 
 // ===== Localized Routing =====
 function setupLocalizedRouting() {
-  log("Setting up localized routing...");
-
-  // Helper to rewriter links in a given container
-  const rewriteLinks = (container = document) => {
-    // 1. Get current language from Ecwid
-    const currentLang = Ecwid.getStorefrontLang();
-    if (!currentLang) return;
-
-    // 2. Check if we correspond to a localized URL structure (e.g. /de/...)
-    // simple check: does pathname start with /<lang>?
-    // or we can just blindly enforce /<lang> if we are confident inside Ecwid's lang context
-    // The user requirement says: "when a language is chosen e.g. /de or /en at the beginning of the URL"
-    // So we should verify we are indeed on a path that starts with /<lang>
-    const pathname = window.location.pathname;
-    const langPrefix = `/${currentLang}`;
-
-    if (!pathname.startsWith(langPrefix)) {
-      // Not currently on a localized path (or default lang), so skip rewriting
-      // unless we want to force it, but requirement implies fixing it when user IS on localized page
-      return;
-    }
-
-    log(`Localized routing active for: ${currentLang}`);
-
-    const links = container.querySelectorAll("a");
-    let count = 0;
-
-    links.forEach((link) => {
-      const href = link.getAttribute("href");
-
-      // Skip invalid or empty hrefs
-      if (!href) return;
-
-      // Skip anchors, javascript, tel, mailto
-      if (
-        href.startsWith("#") ||
-        href.startsWith("javascript:") ||
-        href.startsWith("tel:") ||
-        href.startsWith("mailto:")
-      ) {
-        return;
-      }
-
-      // Check if internal link
-      // 1. Relative path starting with /
-      // 2. Absolute path matching current origin
-      let isInternal = false;
-      let targetPath = href;
-
-      if (href.startsWith("/")) {
-        isInternal = true;
-      } else if (href.startsWith(window.location.origin)) {
-        isInternal = true;
-        targetPath = href.replace(window.location.origin, "");
-      }
-
-      if (!isInternal) return;
-
-      // Skip if already has the prefix
-      if (targetPath.startsWith(langPrefix)) return;
-
-      // Rewrite
-      const newPath = `${langPrefix}${targetPath}`;
-      link.setAttribute("href", newPath);
-      count++;
-    });
-
-    if (count > 0) {
-      log(`Rewrote ${count} links to include ${langPrefix}`);
+  const logRouting = (...args) => {
+    if (CONFIG.debugRouting) {
+      console.log("[Popmerch Routing]", ...args);
     }
   };
 
-  // 1. Hook into Ecwid Page Load (main store area)
-  Ecwid.OnPageLoaded.add((page) => {
-    log("Ecwid page loaded, rewriting links...");
-    // We wait a tick to ensure DOM is ready
-    setTimeout(() => rewriteLinks(document.body), 100);
-  });
+  logRouting("Initializing localized routing observer...");
 
-  // 2. Hook into Instant Site Tile Load (custom sections)
-  if (window.instantsite && window.instantsite.onTileLoaded) {
-    window.instantsite.onTileLoaded.add((tileId) => {
-      log(`Instant Site tile loaded: ${tileId}`);
-      const tile = document.getElementById(tileId);
-      if (tile) {
-        rewriteLinks(tile);
+  // Get current language once (or periodically if it changes without reload, but Ecwid usually reloads)
+  const getLang = () => {
+    const lang = Ecwid.getStorefrontLang();
+    return lang;
+  };
+
+  const processLink = (link, currentLang) => {
+    // Safety check
+    if (!link || !currentLang) return;
+
+    const href = link.getAttribute("href");
+    if (!href) return;
+
+    // Skip special schemes
+    if (
+      href.startsWith("#") ||
+      href.startsWith("javascript:") ||
+      href.startsWith("tel:") ||
+      href.startsWith("mailto:")
+    ) {
+      return;
+    }
+
+    // Determine if it's an internal link that needs rewriting
+    let targetPath = null;
+
+    if (href.startsWith("/")) {
+      targetPath = href;
+    } else if (href.startsWith(window.location.origin)) {
+      targetPath = href.replace(window.location.origin, "");
+    }
+
+    // Process internal links
+    if (targetPath) {
+      const langPrefix = `/${currentLang}`;
+
+      // If the link already starts with the prefix, we are good
+      if (targetPath.startsWith(langPrefix)) {
+        // logRouting("Skipping (already localized):", targetPath);
+        return;
+      }
+
+      // Re-verify we are on a localized path.
+      // We only want to rewrite links if the USER is currently browsing a localized path.
+      // e.g. if user is at /de/foo, and sees a link to /bar, it should become /de/bar.
+      // If user is at /foo (default), link to /bar stays /bar.
+      const currentPath = window.location.pathname;
+      if (!currentPath.startsWith(langPrefix)) {
+        // We are not currently in a localized context (or it's default lang)
+        return;
+      }
+
+      logRouting(`Found candidate link: ${href}`);
+
+      const newPath = `${langPrefix}${targetPath}`;
+      logRouting(`Rewriting link: ${href} -> ${newPath}`);
+
+      link.setAttribute("href", newPath);
+    }
+  };
+
+  // Main processing function for a batch of nodes
+  const processNodes = (nodes) => {
+    const currentLang = getLang();
+    if (!currentLang) return;
+
+    // Only proceed if we are in a localized context
+    const langPrefix = `/${currentLang}`;
+    if (!window.location.pathname.startsWith(langPrefix)) return;
+
+    nodes.forEach((node) => {
+      if (node.nodeType !== Node.ELEMENT_NODE) return;
+
+      // If the node itself is a link
+      if (node.tagName === "A") {
+        processLink(node, currentLang);
+      }
+
+      // Find all links within the node
+      const links = node.querySelectorAll("a");
+      links.forEach((link) => processLink(link, currentLang));
+    });
+  };
+
+  // Observer
+  const observer = new MutationObserver((mutations) => {
+    const nodesToProcess = [];
+
+    mutations.forEach((mutation) => {
+      if (mutation.type === "childList") {
+        mutation.addedNodes.forEach((node) => nodesToProcess.push(node));
+      } else if (
+        mutation.type === "attributes" &&
+        mutation.target.tagName === "A"
+      ) {
+        // If href changed programmatically to something unlocalized, fix it back?
+        // Be careful for infinite loops.
+        // Ideally we only observe childList for new structure.
+        // observing attributes on the whole subtree is expensive.
+        // We'll skip attribute observation for now to keep perf high and risk low.
       }
     });
-  }
 
-  // 3. Initial run
-  rewriteLinks(document.body);
+    if (nodesToProcess.length > 0) {
+      processNodes(nodesToProcess);
+    }
+  });
+
+  // Start observing
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
+
+  // Initial pass on existing DOM
+  logRouting("Running initial pass on existing DOM...");
+  processNodes([document.body]);
 }
 
 // ===== Initialize =====
