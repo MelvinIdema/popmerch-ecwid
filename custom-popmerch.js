@@ -11,7 +11,7 @@ const CONFIG = {
   publicToken: "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf",
   disabledClass: "ecwid-oos",
   debug: false, // Set to false in production
-  debugRouting: true, // Enable for routing debugging
+  debugRouting: false, // Enable for routing debugging
 };
 
 // ===== State =====
