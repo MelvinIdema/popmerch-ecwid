@@ -448,6 +448,26 @@ function setupLocalizedRouting() {
             return;
           }
 
+          // Skip known Ecwid store routes
+          // Rewriting these to /nl/... confuses the Instant Site router
+          const ecwidRoutes = [
+            "/cart",
+            "/checkout",
+            "/account",
+            "/search",
+            "/signin",
+            "/p/",
+            "/c/",
+            "product-page", // often in query params or hash
+            "category-page",
+            "/store",
+          ];
+
+          if (ecwidRoutes.some((route) => targetPath.includes(route))) {
+            // logRouting("Skipping (Ecwid route):", targetPath);
+            return;
+          }
+
           // Rewrite
           const newPath = `${langPrefix}${targetPath}`;
           logRouting(`Rewriting: ${href} -> ${newPath}`);
