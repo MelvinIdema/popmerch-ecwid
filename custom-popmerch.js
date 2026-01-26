@@ -376,125 +376,119 @@ function setupLocalizedRouting() {
     }
   };
 
-  logRouting("Initializing localized routing observer...");
+  const init = () => {
+    logRouting("Ecwid API loaded. Initializing localized routing...");
 
-  // Get current language once (or periodically if it changes without reload, but Ecwid usually reloads)
-  const getLang = () => {
-    const lang = Ecwid.getStorefrontLang();
-    return lang;
-  };
+    // 1. Get and Cache Language
+    const currentLang = Ecwid.getStorefrontLang();
+    logRouting("Current language:", currentLang);
 
-  const processLink = (link, currentLang) => {
-    // Safety check
-    if (!link || !currentLang) return;
-
-    const href = link.getAttribute("href");
-    if (!href) return;
-
-    // Skip special schemes
-    if (
-      href.startsWith("#") ||
-      href.startsWith("javascript:") ||
-      href.startsWith("tel:") ||
-      href.startsWith("mailto:")
-    ) {
+    if (!currentLang) {
+      logRouting("No language detected, aborting.");
       return;
     }
 
-    // Determine if it's an internal link that needs rewriting
-    let targetPath = null;
-
-    if (href.startsWith("/")) {
-      targetPath = href;
-    } else if (href.startsWith(window.location.origin)) {
-      targetPath = href.replace(window.location.origin, "");
-    }
-
-    // Process internal links
-    if (targetPath) {
-      const langPrefix = `/${currentLang}`;
-
-      // If the link already starts with the prefix, we are good
-      if (targetPath.startsWith(langPrefix)) {
-        // logRouting("Skipping (already localized):", targetPath);
-        return;
-      }
-
-      // Re-verify we are on a localized path.
-      // We only want to rewrite links if the USER is currently browsing a localized path.
-      // e.g. if user is at /de/foo, and sees a link to /bar, it should become /de/bar.
-      // If user is at /foo (default), link to /bar stays /bar.
-      const currentPath = window.location.pathname;
-      if (!currentPath.startsWith(langPrefix)) {
-        // We are not currently in a localized context (or it's default lang)
-        return;
-      }
-
-      logRouting(`Found candidate link: ${href}`);
-
-      const newPath = `${langPrefix}${targetPath}`;
-      logRouting(`Rewriting link: ${href} -> ${newPath}`);
-
-      link.setAttribute("href", newPath);
-    }
-  };
-
-  // Main processing function for a batch of nodes
-  const processNodes = (nodes) => {
-    const currentLang = getLang();
-    if (!currentLang) return;
-
-    // Only proceed if we are in a localized context
+    // 2. Define Language Prefix and Rewrite Logic
     const langPrefix = `/${currentLang}`;
-    if (!window.location.pathname.startsWith(langPrefix)) return;
 
-    nodes.forEach((node) => {
-      if (node.nodeType !== Node.ELEMENT_NODE) return;
+    // Check if we are currently on a localized path
+    const currentPath = window.location.pathname;
+    if (!currentPath.startsWith(langPrefix)) {
+      logRouting(
+        `Current path ${currentPath} is not localized (does not start with ${langPrefix}). Aborting.`,
+      );
+      return;
+    }
 
-      // If the node itself is a link
-      if (node.tagName === "A") {
-        processLink(node, currentLang);
+    logRouting(`Localized routing active for prefix: ${langPrefix}`);
+
+    const rewriteLinks = (container = document) => {
+      try {
+        const links = container.querySelectorAll("a");
+        let count = 0;
+
+        links.forEach((link) => {
+          const href = link.getAttribute("href");
+
+          // Basic validity checks
+          if (!href) return;
+          if (
+            href.startsWith("#") ||
+            href.startsWith("javascript:") ||
+            href.startsWith("tel:") ||
+            href.startsWith("mailto:")
+          )
+            return;
+
+          // Determine internal path
+          let targetPath = null;
+          if (href.startsWith("/")) {
+            targetPath = href;
+          } else if (href.startsWith(window.location.origin)) {
+            targetPath = href.replace(window.location.origin, "");
+          }
+
+          if (!targetPath) return;
+
+          // Check if already localized
+          if (targetPath.startsWith(langPrefix)) {
+            // logRouting("Skipping (already localized):", targetPath);
+            return;
+          }
+
+          // Rewrite
+          const newPath = `${langPrefix}${targetPath}`;
+          logRouting(`Rewriting: ${href} -> ${newPath}`);
+          link.setAttribute("href", newPath);
+          count++;
+        });
+
+        if (count > 0)
+          logRouting(`Rewrote ${count} links in container`, container);
+      } catch (e) {
+        console.error("[Popmerch Routing] Error rewriting links:", e);
       }
+    };
 
-      // Find all links within the node
-      const links = node.querySelectorAll("a");
-      links.forEach((link) => processLink(link, currentLang));
+    // 3. Set up Event Listeners
+
+    // Main Page Loads (Storefront navigation)
+    Ecwid.OnPageLoaded.add((page) => {
+      logRouting("Event: OnPageLoaded", page);
+      // Wait for rendering (SPA)
+      setTimeout(() => rewriteLinks(document.body), 200);
+      // Double check a bit later for slow widgets
+      setTimeout(() => rewriteLinks(document.body), 1000);
     });
+
+    // Instant Site Tile Loads
+    if (window.instantsite && window.instantsite.onTileLoaded) {
+      window.instantsite.onTileLoaded.add((tileId) => {
+        logRouting("Event: onTileLoaded", tileId);
+        const tile = document.getElementById(tileId);
+        if (tile) rewriteLinks(tile);
+      });
+    }
+
+    // 4. Initial Pass (catches anything already rendered)
+    rewriteLinks(document.body);
   };
 
-  // Observer
-  const observer = new MutationObserver((mutations) => {
-    const nodesToProcess = [];
-
-    mutations.forEach((mutation) => {
-      if (mutation.type === "childList") {
-        mutation.addedNodes.forEach((node) => nodesToProcess.push(node));
-      } else if (
-        mutation.type === "attributes" &&
-        mutation.target.tagName === "A"
-      ) {
-        // If href changed programmatically to something unlocalized, fix it back?
-        // Be careful for infinite loops.
-        // Ideally we only observe childList for new structure.
-        // observing attributes on the whole subtree is expensive.
-        // We'll skip attribute observation for now to keep perf high and risk low.
+  // Ensure we wait for Ecwid API to be ready
+  if (typeof Ecwid !== "undefined") {
+    Ecwid.OnAPILoaded.add(init);
+  } else {
+    logRouting("Ecwid object not found immediately. Waiting for load...");
+    window.addEventListener("load", () => {
+      if (typeof Ecwid !== "undefined") {
+        Ecwid.OnAPILoaded.add(init);
+      } else {
+        console.error(
+          "[Popmerch Routing] Ecwid not found even after window load.",
+        );
       }
     });
-
-    if (nodesToProcess.length > 0) {
-      processNodes(nodesToProcess);
-    }
-  });
-
-  // Start observing
-  observer.observe(document.body, {
-    childList: true,
-    subtree: true,
-  });
-
-  // Initial pass on existing DOM
-  logRouting("Running initial pass on existing DOM...");
-  processNodes([document.body]);
+  }
 }
 
 // ===== Initialize =====
@@ -507,13 +501,8 @@ function setupLocalizedRouting() {
   // Setup Localized Routing (New)
   // Ensure Ecwid object exists or wait for it?
   // Usually custom js runs after Ecwid.js, but to be safe:
-  if (typeof Ecwid !== "undefined") {
-    setupLocalizedRouting();
-  } else {
-    window.addEventListener("Ecwid.OnAPILoaded", () => {
-      setupLocalizedRouting();
-    });
-  }
+  // Setup Localized Routing (New)
+  setupLocalizedRouting();
 
   // Then setup DOM observer
   if (document.readyState === "loading") {
