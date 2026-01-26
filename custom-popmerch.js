@@ -367,12 +367,119 @@ function setupDOMObserver() {
   }
 }
 
+// ===== Localized Routing =====
+function setupLocalizedRouting() {
+  log("Setting up localized routing...");
+
+  // Helper to rewriter links in a given container
+  const rewriteLinks = (container = document) => {
+    // 1. Get current language from Ecwid
+    const currentLang = Ecwid.getStorefrontLang();
+    if (!currentLang) return;
+
+    // 2. Check if we correspond to a localized URL structure (e.g. /de/...)
+    // simple check: does pathname start with /<lang>?
+    // or we can just blindly enforce /<lang> if we are confident inside Ecwid's lang context
+    // The user requirement says: "when a language is chosen e.g. /de or /en at the beginning of the URL"
+    // So we should verify we are indeed on a path that starts with /<lang>
+    const pathname = window.location.pathname;
+    const langPrefix = `/${currentLang}`;
+
+    if (!pathname.startsWith(langPrefix)) {
+      // Not currently on a localized path (or default lang), so skip rewriting
+      // unless we want to force it, but requirement implies fixing it when user IS on localized page
+      return;
+    }
+
+    log(`Localized routing active for: ${currentLang}`);
+
+    const links = container.querySelectorAll("a");
+    let count = 0;
+
+    links.forEach((link) => {
+      const href = link.getAttribute("href");
+
+      // Skip invalid or empty hrefs
+      if (!href) return;
+
+      // Skip anchors, javascript, tel, mailto
+      if (
+        href.startsWith("#") ||
+        href.startsWith("javascript:") ||
+        href.startsWith("tel:") ||
+        href.startsWith("mailto:")
+      ) {
+        return;
+      }
+
+      // Check if internal link
+      // 1. Relative path starting with /
+      // 2. Absolute path matching current origin
+      let isInternal = false;
+      let targetPath = href;
+
+      if (href.startsWith("/")) {
+        isInternal = true;
+      } else if (href.startsWith(window.location.origin)) {
+        isInternal = true;
+        targetPath = href.replace(window.location.origin, "");
+      }
+
+      if (!isInternal) return;
+
+      // Skip if already has the prefix
+      if (targetPath.startsWith(langPrefix)) return;
+
+      // Rewrite
+      const newPath = `${langPrefix}${targetPath}`;
+      link.setAttribute("href", newPath);
+      count++;
+    });
+
+    if (count > 0) {
+      log(`Rewrote ${count} links to include ${langPrefix}`);
+    }
+  };
+
+  // 1. Hook into Ecwid Page Load (main store area)
+  Ecwid.OnPageLoaded.add((page) => {
+    log("Ecwid page loaded, rewriting links...");
+    // We wait a tick to ensure DOM is ready
+    setTimeout(() => rewriteLinks(document.body), 100);
+  });
+
+  // 2. Hook into Instant Site Tile Load (custom sections)
+  if (window.instantsite && window.instantsite.onTileLoaded) {
+    window.instantsite.onTileLoaded.add((tileId) => {
+      log(`Instant Site tile loaded: ${tileId}`);
+      const tile = document.getElementById(tileId);
+      if (tile) {
+        rewriteLinks(tile);
+      }
+    });
+  }
+
+  // 3. Initial run
+  rewriteLinks(document.body);
+}
+
 // ===== Initialize =====
 (function init() {
   log("Initializing v3.0 (DOM-based)");
 
   // Setup fetch interceptor first to catch product ID
   setupFetchInterceptor();
+
+  // Setup Localized Routing (New)
+  // Ensure Ecwid object exists or wait for it?
+  // Usually custom js runs after Ecwid.js, but to be safe:
+  if (typeof Ecwid !== "undefined") {
+    setupLocalizedRouting();
+  } else {
+    window.addEventListener("Ecwid.OnAPILoaded", () => {
+      setupLocalizedRouting();
+    });
+  }
 
   // Then setup DOM observer
   if (document.readyState === "loading") {
