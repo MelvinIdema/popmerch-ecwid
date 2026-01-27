@@ -37,14 +37,11 @@
         "webshop.popmerch.com"
       ]
     };
-    log("=== URL Localization V2 Debug ===");
+    log("=== URL Localization V3 (Click Interception) ===");
     log("Debug flags:", {
       URL_DEBUG: isDebug(),
       URL_STEP_DETECT_LOCALE: isStepEnabled("DETECT_LOCALE"),
-      URL_STEP_PROCESS_LINKS: isStepEnabled("PROCESS_LINKS"),
-      URL_STEP_LOCALIZE: isStepEnabled("LOCALIZE"),
-      URL_STEP_OBSERVER: isStepEnabled("OBSERVER"),
-      URL_STEP_ECWID_LISTENER: isStepEnabled("ECWID_LISTENER")
+      URL_STEP_CLICK_HANDLER: isStepEnabled("CLICK_HANDLER")
     });
     function getCurrentLocale() {
       if (!isStepEnabled("DETECT_LOCALE")) {
@@ -58,7 +55,7 @@
       log(`Detected locale: ${locale || "(default)"}`);
       return locale;
     }
-    function shouldLocalize(link) {
+    function shouldLocalizeLink(link) {
       const href = link.getAttribute("href");
       if (!href) {
         log("Link has no href, skipping", link);
@@ -75,6 +72,10 @@
         return false;
       }
       const currentLocale = getCurrentLocale();
+      if (!currentLocale) {
+        log("No locale detected, won't localize");
+        return false;
+      }
       if (href.startsWith(`/${currentLocale}/`) || href === `/${currentLocale}`) {
         log(`Link already localized, skipping: ${href}`);
         return false;
@@ -82,107 +83,52 @@
       log(`Link should be localized: ${href}`);
       return true;
     }
-    function localizeLink(link, locale) {
-      if (!isStepEnabled("LOCALIZE")) {
-        logWarn("LOCALIZE step disabled - skipping actual rewrite");
+    function buildLocalizedUrl(originalHref, locale) {
+      if (originalHref === "/" || originalHref === "") {
+        return `/${locale}`;
+      }
+      const path = originalHref.startsWith("/") ? originalHref : `/${originalHref}`;
+      return `/${locale}${path}`;
+    }
+    function handleLinkClick(event) {
+      if (!isStepEnabled("CLICK_HANDLER")) {
+        logWarn("CLICK_HANDLER step disabled");
+        return;
+      }
+      const link = event.target.closest("a");
+      if (!link) {
+        log("Click not on anchor element");
+        return;
+      }
+      if (link.dataset.noLocalize) {
+        log("Link has data-no-localize attribute, skipping", link);
+        return;
+      }
+      if (!shouldLocalizeLink(link)) {
         return;
       }
       const originalHref = link.getAttribute("href");
-      log(`Localizing link: ${originalHref}`);
-      let newHref;
-      if (originalHref === "/" || originalHref === "") {
-        newHref = `/${locale}`;
-      } else {
-        const path = originalHref.startsWith("/") ? originalHref : `/${originalHref}`;
-        newHref = `/${locale}${path}`;
-      }
-      link.setAttribute("href", newHref);
-      log(`Localized: ${originalHref} → ${newHref}`);
-    }
-    function processLinks() {
-      if (!isStepEnabled("PROCESS_LINKS")) {
-        logWarn("PROCESS_LINKS step disabled");
-        return;
-      }
-      log("Processing links...");
       const locale = getCurrentLocale();
       if (!locale) {
-        log("No locale detected, skipping processing");
+        log("No locale, allowing default behavior");
         return;
       }
-      const links = document.querySelectorAll("a[href]");
-      log(`Found ${links.length} total links in DOM`);
-      let count = 0;
-      let skipped = 0;
-      links.forEach((link) => {
-        if (link.dataset.noLocalize) {
-          log("Link has data-no-localize attribute, skipping", link);
-          skipped++;
-          return;
-        }
-        if (shouldLocalize(link)) {
-          localizeLink(link, locale);
-          count++;
-        } else {
-          skipped++;
-        }
-      });
-      log(
-        `Processed ${links.length} links: ${count} localized, ${skipped} skipped`
-      );
+      const localizedUrl = buildLocalizedUrl(originalHref, locale);
+      log(`Intercepting click: ${originalHref} → ${localizedUrl}`);
+      event.preventDefault();
+      window.location.href = localizedUrl;
     }
-    function setupObserver() {
-      if (!isStepEnabled("OBSERVER")) {
-        logWarn("OBSERVER step disabled");
+    function setupClickHandler() {
+      if (!isStepEnabled("CLICK_HANDLER")) {
+        logWarn("CLICK_HANDLER step disabled");
         return;
       }
-      log("Setting up MutationObserver...");
-      const observer = new MutationObserver((mutations) => {
-        let shouldProcess = false;
-        mutations.forEach((mutation) => {
-          if (mutation.addedNodes.length > 0) {
-            log("DOM nodes added, will reprocess links");
-            shouldProcess = true;
-          } else if (mutation.type === "attributes" && mutation.attributeName === "href") {
-            log("href attribute changed, will reprocess links");
-            shouldProcess = true;
-          }
-        });
-        if (shouldProcess) {
-          processLinks();
-        }
-      });
-      observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ["href"]
-      });
-      log("MutationObserver active on document.body");
-    }
-    function setupEcwidListener() {
-      if (!isStepEnabled("ECWID_LISTENER")) {
-        logWarn("ECWID_LISTENER step disabled");
-        return;
-      }
-      if (typeof Ecwid === "undefined" || !Ecwid.OnPageLoaded) {
-        logWarn("Ecwid not available, skipping listener setup");
-        return;
-      }
-      log("Setting up Ecwid.OnPageLoaded listener...");
-      Ecwid.OnPageLoaded.add(function(page) {
-        log("Ecwid page loaded, reprocessing links", page);
-        setTimeout(() => {
-          log("Delayed processing after Ecwid page load");
-          processLinks();
-        }, 100);
-      });
-      log("Ecwid listener active");
+      log("Setting up click handler on document.body...");
+      document.body.addEventListener("click", handleLinkClick, true);
+      log("Click handler active ✓");
     }
     log("Initializing URL Localization Module");
-    processLinks();
-    setupObserver();
-    setupEcwidListener();
+    setupClickHandler();
     log("URL Localization Module initialized ✓");
   }
   initUrlLocalization();
