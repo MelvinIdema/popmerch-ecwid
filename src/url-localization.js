@@ -7,9 +7,9 @@
  * This approach avoids triggering Ecwid's internal listeners that cause unwanted popups.
  *
  * Debug flags (set in localStorage):
- * - URL_DEBUG = "true" - Enable all debug logging
- * - URL_STEP_DETECT_LOCALE = "true" - Enable locale detection step
- * - URL_STEP_CLICK_HANDLER = "true" - Enable click interception
+ * - URL_DEBUG = "true" - Enable debug logging
+ * - URL_STEP_DETECT_LOCALE = "false" - Disable locale detection step
+ * - URL_STEP_CLICK_HANDLER = "false" - Disable click interception
  */
 
 export function initUrlLocalization() {
@@ -28,12 +28,18 @@ export function initUrlLocalization() {
 
   /**
    * Check if a specific step is enabled
+   * Default: Enabled (returns true)
+   * To disable: Set localStorage item to "false"
    */
   function isStepEnabled(step) {
+    // In production (debug off), always enabled
+    if (!isDebug()) return true;
+
     try {
-      return localStorage.getItem(`URL_STEP_${step}`) === "true";
+      // In debug mode, enabled unless explicitly set to "false"
+      return localStorage.getItem(`URL_STEP_${step}`) !== "false";
     } catch {
-      return false;
+      return true;
     }
   }
 
@@ -86,8 +92,8 @@ export function initUrlLocalization() {
     ],
   };
 
-  log("=== URL Localization V3 (Click Interception) ===");
-  log("Debug flags:", {
+  log("=== URL Localization V3 (Production Ready) ===");
+  log("Step Configuration (Default: Enabled):", {
     URL_DEBUG: isDebug(),
     URL_STEP_DETECT_LOCALE: isStepEnabled("DETECT_LOCALE"),
     URL_STEP_CLICK_HANDLER: isStepEnabled("CLICK_HANDLER"),

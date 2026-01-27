@@ -9,10 +9,11 @@
       }
     }
     function isStepEnabled(step) {
+      if (!isDebug()) return true;
       try {
-        return localStorage.getItem(`URL_STEP_${step}`) === "true";
+        return localStorage.getItem(`URL_STEP_${step}`) !== "false";
       } catch {
-        return false;
+        return true;
       }
     }
     function log(msg, data = null) {
@@ -37,8 +38,8 @@
         "webshop.popmerch.com"
       ]
     };
-    log("=== URL Localization V3 (Click Interception) ===");
-    log("Debug flags:", {
+    log("=== URL Localization V3 (Production Ready) ===");
+    log("Step Configuration (Default: Enabled):", {
       URL_DEBUG: isDebug(),
       URL_STEP_DETECT_LOCALE: isStepEnabled("DETECT_LOCALE"),
       URL_STEP_CLICK_HANDLER: isStepEnabled("CLICK_HANDLER")
