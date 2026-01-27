@@ -6,8 +6,10 @@
       storeId: 111654255,
       publicToken: "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf",
       disabledClass: "ecwid-oos",
-      debug: false
+      debug: false,
       // Set to false in production
+      autoSelect: false
+      // Usage: set to true to enable auto-selection of first available option
     };
     let currentProductId = null;
     let processedContainers = /* @__PURE__ */ new WeakSet();
@@ -110,16 +112,6 @@
             );
           }
         });
-        autoSelectFirstAvailable(inputs);
-      }
-    }
-    function autoSelectFirstAvailable(inputs, optionName) {
-      const checked = Array.from(inputs).find((i) => i.checked);
-      if (!checked || checked && checked.disabled) {
-        const firstEnabled = Array.from(inputs).find((i) => !i.disabled);
-        if (firstEnabled) {
-          firstEnabled.click();
-        }
       }
     }
     async function processProductOptions(container) {

@@ -12,6 +12,7 @@ export function initStockManager() {
     publicToken: "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf",
     disabledClass: "ecwid-oos",
     debug: false, // Set to false in production
+    autoSelect: false, // Usage: set to true to enable auto-selection of first available option
   };
 
   // ===== State =====
@@ -181,6 +182,8 @@ export function initStockManager() {
 
   // ===== Auto-select First Available =====
   function autoSelectFirstAvailable(inputs, optionName) {
+    if (!CONFIG.autoSelect) return;
+
     const checked = Array.from(inputs).find((i) => i.checked);
 
     if (!checked || (checked && checked.disabled)) {
