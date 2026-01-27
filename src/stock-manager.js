@@ -124,14 +124,20 @@ export function initStockManager() {
   }
 
   // ===== Apply Stock Status to DOM =====
-  function applyStockStatus(availabilityMap) {
+  function applyStockStatus(availabilityMap, container) {
     log("Applying stock status to DOM");
+
+    if (!container) {
+      logError("No container provided to applyStockStatus");
+      return;
+    }
 
     for (const [optionName, valuesMap] of availabilityMap.entries()) {
       const selector = `input.form-control__radio[name="${CSS.escape(
         optionName,
       )}"]`;
-      const inputs = document.querySelectorAll(selector);
+      // SCOPED QUERY: Only look within the specific product container
+      const inputs = container.querySelectorAll(selector);
 
       if (!inputs.length) {
         log(`No inputs found for option "${optionName}"`);
@@ -180,6 +186,8 @@ export function initStockManager() {
     if (!checked || (checked && checked.disabled)) {
       const firstEnabled = Array.from(inputs).find((i) => !i.disabled);
       if (firstEnabled) {
+        // Consider dispatching change event instead of click if popup persists,
+        // but scoping usually fixes the "wrong widget" click.
         firstEnabled.click();
       }
     }
@@ -214,7 +222,7 @@ export function initStockManager() {
       return;
     }
 
-    applyStockStatus(availabilityMap);
+    applyStockStatus(availabilityMap, container);
   }
 
   // ===== Extract Product ID from Page =====

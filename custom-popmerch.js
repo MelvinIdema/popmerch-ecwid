@@ -80,12 +80,16 @@
       }
       return map;
     }
-    function applyStockStatus(availabilityMap) {
+    function applyStockStatus(availabilityMap, container) {
+      if (!container) {
+        logError("No container provided to applyStockStatus");
+        return;
+      }
       for (const [optionName, valuesMap] of availabilityMap.entries()) {
         const selector = `input.form-control__radio[name="${CSS.escape(
           optionName
         )}"]`;
-        const inputs = document.querySelectorAll(selector);
+        const inputs = container.querySelectorAll(selector);
         if (!inputs.length) {
           continue;
         }
@@ -136,7 +140,7 @@
       if (availabilityMap.size === 0) {
         return;
       }
-      applyStockStatus(availabilityMap);
+      applyStockStatus(availabilityMap, container);
     }
     function extractProductIdFromPage() {
       var _a, _b, _c, _d;
@@ -189,7 +193,7 @@
         if (container && !processedContainers.has(container)) {
           processedContainers.add(container);
           setTimeout(() => {
-            processProductOptions();
+            processProductOptions(container);
           }, 100);
         }
       });
@@ -203,7 +207,7 @@
       if (existingContainer && !processedContainers.has(existingContainer)) {
         processedContainers.add(existingContainer);
         setTimeout(() => {
-          processProductOptions();
+          processProductOptions(existingContainer);
         }, 100);
       }
     }
