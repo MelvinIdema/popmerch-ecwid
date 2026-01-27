@@ -369,95 +369,157 @@ function setupDOMObserver() {
 }
 
 // ===== Localized Routing =====
-// ===== Localized Navigation Interceptor =====
-function setupLocalizedNavigationInterceptor() {
+function setupLocalizedRouting() {
   const logRouting = (...args) => {
     if (CONFIG.debugRouting) {
       console.log("[Popmerch Routing]", ...args);
     }
   };
 
-  const KILL_SWITCH_KEY = "POPMERCH_DISABLE_ROUTING";
+  const init = () => {
+    logRouting("Ecwid API loaded. Initializing localized routing...");
 
-  const initInterceptor = () => {
-    // 0. Kill Switch Check
-    if (localStorage.getItem(KILL_SWITCH_KEY) === "true") {
-      console.warn("[Popmerch Routing] Disabled via localStorage kill switch.");
+    // 1. Get and Cache Language
+    const currentLang = Ecwid.getStorefrontLang();
+    logRouting("Current language:", currentLang);
+
+    if (!currentLang) {
+      logRouting("No language detected, aborting.");
       return;
     }
 
-    logRouting("Initializing click interceptor...");
+    // 2. Define Language Prefix and Rewrite Logic
+    const langPrefix = `/${currentLang}`;
 
-    // Global click listener
-    document.body.addEventListener(
-      "click",
-      (e) => {
-        // Find closest anchor tag
-        const link = e.target.closest("a");
-        if (!link) return;
+    // Check if we are currently on a localized path
+    const currentPath = window.location.pathname;
+    if (!currentPath.startsWith(langPrefix)) {
+      logRouting(
+        `Current path ${currentPath} is not localized (does not start with ${langPrefix}). Aborting.`,
+      );
+      return;
+    }
 
-        const href = link.getAttribute("href");
-        if (!href) return;
+    logRouting(`Localized routing active for prefix: ${langPrefix}`);
 
-        // 1. Get current language
-        const currentLang = Ecwid.getStorefrontLang();
-        if (!currentLang) return;
+    const rewriteLinks = (container = document) => {
+      try {
+        const links = container.querySelectorAll("a");
+        let count = 0;
 
-        const langPrefix = `/${currentLang}`;
+        links.forEach((link) => {
+          const href = link.getAttribute("href");
 
-        // 2. Check if we are currently on a localized path
-        // If the user isn't on a localized page, we don't interfere
-        if (!window.location.pathname.startsWith(langPrefix)) {
-          return;
-        }
+          // Basic validity checks
+          if (!href) return;
+          if (
+            href.startsWith("#") ||
+            href.startsWith("javascript:") ||
+            href.startsWith("tel:") ||
+            href.startsWith("mailto:")
+          )
+            return;
 
-        // 3. Skip special schemes
-        if (
-          href.startsWith("#") ||
-          href.startsWith("javascript:") ||
-          href.startsWith("tel:") ||
-          href.startsWith("mailto:")
-        )
-          return;
+          // Determine internal path
+          let targetPath = null;
+          if (href.startsWith("/")) {
+            targetPath = href;
+          } else if (href.startsWith(window.location.origin)) {
+            targetPath = href.replace(window.location.origin, "");
+          }
 
-        // 4. Determine internal path
-        let targetPath = null;
-        if (href.startsWith("/")) {
-          targetPath = href;
-        } else if (href.startsWith(window.location.origin)) {
-          targetPath = href.replace(window.location.origin, "");
-        }
+          if (!targetPath) return;
 
-        // If not internal, ignore
-        if (!targetPath) return;
+          // Check if already localized
+          if (targetPath.startsWith(langPrefix)) {
+            // logRouting("Skipping (already localized):", targetPath);
+            return;
+          }
 
-        // 5. Check if already localized
-        if (targetPath.startsWith(langPrefix)) {
-          // Already has prefix, standard navigation applies
-          return;
-        }
+          // Skip links inside Ecwid widgets to prevent breaking SPA/Popups
+          // Ecwid handles its own routing; changing hrefs can break it or trigger "modal" fallbacks
+          if (
+            link.closest(".ecwid-productBrowser") ||
+            link.closest(".ec-store") ||
+            link.closest(".ec-minicart") ||
+            link.closest(`[id^="my-store-"]`)
+          ) {
+            // logRouting("Skipping (Ecwid internal):", href);
+            return;
+          }
 
-        // 6. INTERCEPT
-        logRouting(`Intercepted click to: ${href}`);
-        e.preventDefault();
-        e.stopPropagation(); // Stop propagation to prevent Ecwid generic handlers
+          // Skip known Ecwid store routes
+          // Rewriting these to /nl/... confuses the Instant Site router
+          const ecwidRoutes = [
+            "/cart",
+            "/checkout",
+            "/account",
+            "/search",
+            "/signin",
+            "/p/",
+            "/c/",
+            "product-page", // often in query params or hash
+            "category-page",
+            "/store",
+            "/products",
+            "/categories",
+          ];
 
-        const newUrl = `${window.location.origin}${langPrefix}${targetPath}`;
-        logRouting(`Redirecting to: ${newUrl}`);
+          if (ecwidRoutes.some((route) => targetPath.includes(route))) {
+            // logRouting("Skipping (Ecwid route):", targetPath);
+            return;
+          }
 
-        // Use standard navigation
-        window.location.href = newUrl;
-      },
-      true,
-    ); // Capture phase
+          // Rewrite
+          const newPath = `${langPrefix}${targetPath}`;
+          logRouting(`Rewriting: ${href} -> ${newPath}`);
+          link.setAttribute("href", newPath);
+          count++;
+        });
+
+        if (count > 0)
+          logRouting(`Rewrote ${count} links in container`, container);
+      } catch (e) {
+        console.error("[Popmerch Routing] Error rewriting links:", e);
+      }
+    };
+
+    // 3. Set up Event Listeners
+
+    // Main Page Loads (Storefront navigation)
+    Ecwid.OnPageLoaded.add((page) => {
+      logRouting("Event: OnPageLoaded", page);
+      // Wait for rendering (SPA)
+      setTimeout(() => rewriteLinks(document.body), 200);
+      // Double check a bit later for slow widgets
+      setTimeout(() => rewriteLinks(document.body), 1000);
+    });
+
+    // Instant Site Tile Loads
+    if (window.instantsite && window.instantsite.onTileLoaded) {
+      window.instantsite.onTileLoaded.add((tileId) => {
+        logRouting("Event: onTileLoaded", tileId);
+        const tile = document.getElementById(tileId);
+        if (tile) rewriteLinks(tile);
+      });
+    }
+
+    // 4. Initial Pass (catches anything already rendered)
+    rewriteLinks(document.body);
   };
 
+  // Ensure we wait for Ecwid API to be ready
   if (typeof Ecwid !== "undefined") {
-    Ecwid.OnAPILoaded.add(initInterceptor);
+    Ecwid.OnAPILoaded.add(init);
   } else {
+    logRouting("Ecwid object not found immediately. Waiting for load...");
     window.addEventListener("load", () => {
       if (typeof Ecwid !== "undefined") {
-        Ecwid.OnAPILoaded.add(initInterceptor);
+        Ecwid.OnAPILoaded.add(init);
+      } else {
+        console.error(
+          "[Popmerch Routing] Ecwid not found even after window load.",
+        );
       }
     });
   }
@@ -473,8 +535,8 @@ function setupLocalizedNavigationInterceptor() {
   // Setup Localized Routing (New)
   // Ensure Ecwid object exists or wait for it?
   // Usually custom js runs after Ecwid.js, but to be safe:
-  // Setup Localized Navigation (Click Interceptor)
-  setupLocalizedNavigationInterceptor();
+  // Setup Localized Routing (New)
+  setupLocalizedRouting();
 
   // Then setup DOM observer
   if (document.readyState === "loading") {
