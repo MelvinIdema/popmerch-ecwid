@@ -1,55 +1,68 @@
 (function() {
   "use strict";
-  const CONSTANTS = {
+  const CONFIG = {
     STORE_ID: 111654255,
     PUBLIC_TOKEN: "public_UX3rrCEkswfuu838NrnC8yWWebi1GmWf",
-    // Note: Ensure this token is safe to expose client-side or consider proxying if needed, though Ecwid public tokens are generally safe for READ operations.
-    DISABLED_CLASS: "ecwid-oos",
-    DEBUG_KEY: "POPMERCH_DEBUG"
+    DEBUG_KEY: "POPMERCH_STOCK_DEBUG",
+    DISABLED_OPTION_CLASS: "popmerch-option--disabled",
+    SELECTORS: {
+      OPTIONS_CONTAINER: ".product-details__product-options",
+      PRODUCT_PAGE: ".ec-store__product-page",
+      OPTION_WRAPPER: [
+        ".form-control__check",
+        ".form-control--checkbox-button",
+        "label"
+      ]
+    },
+    DEBOUNCE_MS: 50,
+    API_TIMEOUT_MS: 5e3
   };
   class Logger {
     static get isEnabled() {
       try {
-        return localStorage.getItem(CONSTANTS.DEBUG_KEY) === "true";
+        return localStorage.getItem(CONFIG.DEBUG_KEY) === "true";
       } catch (e) {
         return false;
       }
     }
-    static log(message, data = null) {
+    static _print(type, message, data = null) {
       if (!this.isEnabled) return;
-      const styles = "background: #2e7d32; color: #fff; padding: 2px 5px; border-radius: 3px; font-weight: bold;";
+      const styles = {
+        log: "background: #2e7d32; color: #fff; padding: 2px 5px; border-radius: 3px; font-weight: bold;",
+        warn: "background: #f57f17; color: #fff; padding: 2px 5px; border-radius: 3px; font-weight: bold;",
+        error: "background: #c62828; color: #fff; padding: 2px 5px; border-radius: 3px; font-weight: bold;"
+      };
+      const prefix = `%cStockManager%c ${message}`;
+      const style = styles[type] || styles.log;
+      const args = [prefix, style, "color: inherit;"];
       if (data) {
-        console.log(
-          `%cStockManager%c ${message}`,
-          styles,
-          "color: inherit;",
-          data
-        );
-      } else {
-        console.log(`%cStockManager%c ${message}`, styles, "color: inherit;");
+        args.push(data);
       }
+      console[type](...args);
+    }
+    static log(message, data = null) {
+      this._print("log", message, data);
+    }
+    static warn(message, data = null) {
+      this._print("warn", message, data);
     }
     static error(message, error) {
-      const styles = "background: #c62828; color: #fff; padding: 2px 5px; border-radius: 3px; font-weight: bold;";
-      console.error(
-        `%cStockManager%c ${message}`,
-        styles,
-        "color: inherit;",
-        error
-      );
+      this._print("error", message, error);
     }
   }
   class StockManager {
     constructor() {
-      this.processedProductId = null;
+      this.currentProductId = null;
       this.observer = null;
+      this.debounceTimer = null;
+      this.stockMap = /* @__PURE__ */ new Map();
     }
     /**
      * Initialize the Stock Manager
      * Sets up global Ecwid event listeners.
      */
     init() {
-      Logger.log("Initializing...");
+      Logger.log("✓ Initialized, listening for product pages");
       if (typeof Ecwid === "undefined") {
         Logger.error("Ecwid global object not found. Retrying in 500ms...");
         setTimeout(() => this.init(), 500);
@@ -58,63 +71,84 @@
       Ecwid.OnPageLoaded.add((page) => {
         this.handlePageLoad(page);
       });
-      Logger.log("Ready and listening for pages.");
     }
     /**
      * Handle Ecwid OnPageLoaded event
      * @param {Object} page Ecwid page object
      */
     handlePageLoad(page) {
-      Logger.log("Page loaded:", page);
-      this.disconnectObserver();
+      this.cleanup();
       if (page.type === "PRODUCT") {
-        this.processedProductId = page.productId;
+        Logger.log(`Product page detected: id=${page.productId}`, page);
+        this.currentProductId = page.productId;
         this.checkStock(page.productId);
       } else {
-        this.processedProductId = null;
+        Logger.log("Not a product page, idle.");
       }
+    }
+    /**
+     * Cleanup observers and state when leaving a product page
+     */
+    cleanup() {
+      if (this.currentProductId) {
+        Logger.log("Left product page, cleaning up");
+      }
+      this.disconnectObserver();
+      this.currentProductId = null;
+      this.stockMap.clear();
     }
     /**
      * Fetch stock data for a product and apply to DOM
      * @param {number} productId
      */
     async checkStock(productId) {
-      Logger.log(`Checking stock for product ${productId}...`);
-      const combinations = await this.fetchCombinations(productId);
-      if (!combinations || combinations.length === 0) {
-        Logger.log("No combinations found. Skipping.");
-        return;
+      Logger.log(`Fetching combinations for product ${productId}...`);
+      try {
+        const combinations = await this.fetchCombinations(productId);
+        if (!combinations || combinations.length === 0) {
+          Logger.log("No combinations found. Skipping.");
+          return;
+        }
+        Logger.log(`Found ${combinations.length} combinations`);
+        this.stockMap = this.buildAvailabilityMap(combinations);
+        if (this.stockMap.size === 0) {
+          Logger.log("Availability map empty.");
+          return;
+        }
+        this.applyStockToDom();
+        this.setupObserver();
+      } catch (error) {
+        Logger.error("Failed to check stock", error);
       }
-      const availabilityMap = this.buildAvailabilityMap(combinations);
-      if (availabilityMap.size === 0) {
-        Logger.log("Availability map empty.");
-        return;
-      }
-      this.applyStockToDom(availabilityMap);
-      this.setupObserver(availabilityMap);
     }
     /**
      * Fetch product combinations from Ecwid REST API
+     *With timeout and error handling.
      * @param {number} productId
      * @returns {Promise<Array>} List of combinations
      */
     async fetchCombinations(productId) {
-      const url = `https://app.ecwid.com/api/v3/${CONSTANTS.STORE_ID}/products/${productId}/combinations`;
+      const url = `https://app.ecwid.com/api/v3/${CONFIG.STORE_ID}/products/${productId}/combinations`;
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), CONFIG.API_TIMEOUT_MS);
       try {
         const response = await fetch(url, {
           method: "GET",
           headers: {
-            Authorization: `Bearer ${CONSTANTS.PUBLIC_TOKEN}`,
+            Authorization: `Bearer ${CONFIG.PUBLIC_TOKEN}`,
             "Content-Type": "application/json"
-          }
+          },
+          signal: controller.signal
         });
+        clearTimeout(id);
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
         const data = await response.json();
         return Array.isArray(data) ? data : data.items || [];
       } catch (error) {
-        Logger.error("Fetch failed:", error);
+        clearTimeout(id);
+        Logger.error("API fetch failed:", error);
         return [];
       }
     }
@@ -142,70 +176,80 @@
     }
     /**
      * Apply disabled state to DOM elements
-     * @param {Map} availabilityMap
+     * Uses the cached this.stockMap
      */
-    applyStockToDom(availabilityMap) {
+    applyStockToDom() {
       const container = document.querySelector(
-        ".product-details__product-options"
+        CONFIG.SELECTORS.OPTIONS_CONTAINER
       );
       if (!container) {
-        Logger.log("Product options container not found (yet).");
         return;
       }
-      Logger.log("Applying stock rules to DOM...");
-      for (const [optionName, valuesMap] of availabilityMap.entries()) {
+      let disabledCount = 0;
+      for (const [optionName, valuesMap] of this.stockMap.entries()) {
         const safeName = CSS.escape(optionName);
         const inputs = container.querySelectorAll(`input[name="${safeName}"]`);
-        if (inputs.length === 0) {
-          continue;
-        }
         inputs.forEach((input) => {
           const val = input.value;
           if (valuesMap.has(val)) {
             const isAvailable = valuesMap.get(val);
             if (!isAvailable) {
               this.disableInput(input);
+              disabledCount++;
             } else {
               this.enableInput(input);
             }
           }
         });
       }
+      if (disabledCount > 0) {
+        Logger.log(`Disabled ${disabledCount} out-of-stock options`);
+      }
     }
     disableInput(input) {
       if (input.disabled) return;
       input.disabled = true;
-      const wrapper = input.closest(".form-control__check") || input.closest(".form-control--checkbox-button") || input.closest("label");
+      const wrapper = this.findWrapper(input);
       if (wrapper) {
-        wrapper.classList.add(CONSTANTS.DISABLED_CLASS);
+        wrapper.classList.add(CONFIG.DISABLED_OPTION_CLASS);
         wrapper.title = "Out of stock";
       }
     }
     enableInput(input) {
       if (!input.disabled) return;
       input.disabled = false;
-      const wrapper = input.closest(".form-control__check") || input.closest(".form-control--checkbox-button") || input.closest("label");
+      const wrapper = this.findWrapper(input);
       if (wrapper) {
-        wrapper.classList.remove(CONSTANTS.DISABLED_CLASS);
+        wrapper.classList.remove(CONFIG.DISABLED_OPTION_CLASS);
         wrapper.removeAttribute("title");
       }
     }
-    setupObserver(availabilityMap) {
-      const container = document.querySelector(".ec-store__product-page") || document.body;
+    findWrapper(input) {
+      for (const selector of CONFIG.SELECTORS.OPTION_WRAPPER) {
+        const el = input.closest(selector);
+        if (el) return el;
+      }
+      return null;
+    }
+    setupObserver() {
+      if (this.observer) return;
+      const targetNode = document.querySelector(CONFIG.SELECTORS.PRODUCT_PAGE) || document.body;
       this.observer = new MutationObserver((mutations) => {
+        let shouldUpdate = false;
         for (const mutation of mutations) {
           if (mutation.type === "childList") {
-            const optionsContainer = document.querySelector(
-              ".product-details__product-options"
-            );
-            if (optionsContainer) {
-              this.applyStockToDom(availabilityMap);
-              break;
-            }
+            shouldUpdate = true;
+            break;
           }
         }
+        if (shouldUpdate) {
+          if (this.debounceTimer) clearTimeout(this.debounceTimer);
+          this.debounceTimer = setTimeout(() => {
+            this.applyStockToDom();
+          }, CONFIG.DEBOUNCE_MS);
+        }
       });
-      this.observer.observe(container, {
+      this.observer.observe(targetNode, {
         childList: true,
         subtree: true
       });
@@ -216,9 +260,33 @@
         this.observer.disconnect();
         this.observer = null;
       }
+      if (this.debounceTimer) {
+        clearTimeout(this.debounceTimer);
+        this.debounceTimer = null;
+      }
     }
   }
+  function initStockManager() {
+    const manager = new StockManager();
+    manager.init();
+    const styleId = "popmerch-stock-styles";
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement("style");
+      style.id = styleId;
+      style.textContent = `
+      .${CONFIG.DISABLED_OPTION_CLASS} {
+        opacity: 0.5;
+        cursor: not-allowed;
+        text-decoration: line-through;
+      }
+      .${CONFIG.DISABLED_OPTION_CLASS} input {
+        cursor: not-allowed;
+      }
+    `;
+      document.head.appendChild(style);
+    }
+    return manager;
+  }
   console.log("Initializing Popmerch Ecwid Extensions...");
-  const stockManager = new StockManager();
-  stockManager.init();
+  initStockManager();
 })();

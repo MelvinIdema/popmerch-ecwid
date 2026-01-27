@@ -1,6 +1,5 @@
-import { StockManager } from "./stock-manager.js";
+import { initStockManager } from "./stock-manager-v2.js";
 
 console.log("Initializing Popmerch Ecwid Extensions...");
 
-const stockManager = new StockManager();
-stockManager.init();
+initStockManager();
