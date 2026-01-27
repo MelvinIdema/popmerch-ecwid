@@ -1,2 +1,2 @@
-import { initStockManager } from "./stock-manager-v2.js";
-initStockManager();
+import { initUrlLocalization } from "./url-localization.js";
+initUrlLocalization();
