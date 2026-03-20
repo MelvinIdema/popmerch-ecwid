@@ -138,6 +138,42 @@
     log("URL Localization Module initialized ✓");
   }
   function initAddressValidation(config = {}) {
+    const FIELD_SELECTORS = {
+      street: [
+        'input[autocomplete="address-line1"]',
+        'input[name="street"]',
+        'input[name*="street" i]',
+        'input[id*="street" i]',
+        'input[name*="address" i]',
+        'input[id*="address" i]'
+      ],
+      city: [
+        'input[autocomplete="address-level2"]',
+        'input[name="city"]',
+        'input[name*="city" i]',
+        'input[id*="city" i]',
+        'input[name*="town" i]',
+        'input[id*="town" i]'
+      ],
+      postalCode: [
+        'input[autocomplete="postal-code"]',
+        'input[name="postalCode"]',
+        'input[name*="postal" i]',
+        'input[id*="postal" i]',
+        'input[name*="zip" i]',
+        'input[id*="zip" i]'
+      ],
+      country: [
+        'select[autocomplete="country"]',
+        'select[name="countryName"]',
+        'select[name*="country" i]',
+        'select[id*="country" i]',
+        'input[autocomplete="country-name"]',
+        'input[name="countryName"]',
+        'input[name*="country" i]',
+        'input[id*="country" i]'
+      ]
+    };
     function isDebug() {
       try {
         return localStorage.getItem("ADDR_DEBUG") === "true";
@@ -271,7 +307,7 @@
       return { ...addr, street: normalizeStreet(addr.street) };
     }
     function isAddressComplete(addr) {
-      return !!((addr == null ? void 0 : addr.street) && (addr == null ? void 0 : addr.city) && (addr == null ? void 0 : addr.countryName));
+      return !!((addr == null ? void 0 : addr.street) && (addr == null ? void 0 : addr.city));
     }
     function addressKey(addr) {
       const n = (v) => (v || "").toLowerCase().trim().replace(/\s+/g, " ");
@@ -293,36 +329,44 @@
         return null;
       };
       return {
-        streetInput: get([
-          'input[autocomplete="address-line1"]',
-          'input[name="street"]'
-        ]),
-        cityInput: get([
-          'input[autocomplete="address-level2"]',
-          'input[name="city"]'
-        ]),
-        zipInput: get([
-          'input[autocomplete="postal-code"]',
-          'input[name="postalCode"]'
-        ]),
-        countryEl: get([
-          'select[autocomplete="country"]',
-          'select[name="countryName"]',
-          'input[autocomplete="country-name"]',
-          'input[name="countryName"]'
-        ])
+        streetInput: get(FIELD_SELECTORS.street),
+        cityInput: get(FIELD_SELECTORS.city),
+        zipInput: get(FIELD_SELECTORS.postalCode),
+        countryEl: get(FIELD_SELECTORS.country)
       };
     }
     function readAddressFromDom() {
-      var _a, _b, _c, _d;
+      var _a, _b, _c, _d, _e, _f, _g, _h;
       const { streetInput, cityInput, zipInput, countryEl } = getAddressDomFields();
       if (!streetInput && !cityInput) return null;
+      const countryName = countryEl instanceof HTMLSelectElement ? ((_c = (_b = (_a = countryEl.selectedOptions) == null ? void 0 : _a[0]) == null ? void 0 : _b.text) == null ? void 0 : _c.trim()) || ((_d = countryEl.value) == null ? void 0 : _d.trim()) || "" : ((_e = countryEl == null ? void 0 : countryEl.value) == null ? void 0 : _e.trim()) || "";
       return {
-        street: ((_a = streetInput == null ? void 0 : streetInput.value) == null ? void 0 : _a.trim()) || "",
-        city: ((_b = cityInput == null ? void 0 : cityInput.value) == null ? void 0 : _b.trim()) || "",
-        postalCode: ((_c = zipInput == null ? void 0 : zipInput.value) == null ? void 0 : _c.trim()) || "",
-        countryName: ((_d = countryEl == null ? void 0 : countryEl.value) == null ? void 0 : _d.trim()) || ""
+        street: ((_f = streetInput == null ? void 0 : streetInput.value) == null ? void 0 : _f.trim()) || "",
+        city: ((_g = cityInput == null ? void 0 : cityInput.value) == null ? void 0 : _g.trim()) || "",
+        postalCode: ((_h = zipInput == null ? void 0 : zipInput.value) == null ? void 0 : _h.trim()) || "",
+        countryName
       };
+    }
+    function describeField(el) {
+      if (!el) return null;
+      return {
+        tag: el.tagName,
+        name: el.getAttribute("name"),
+        id: el.getAttribute("id"),
+        autocomplete: el.getAttribute("autocomplete"),
+        type: el.getAttribute("type"),
+        value: el.value
+      };
+    }
+    function logDetectedFields(reason) {
+      if (!isDebug()) return;
+      const fields = getAddressDomFields();
+      log(`Detected address fields (${reason})`, {
+        street: describeField(fields.streetInput),
+        city: describeField(fields.cityInput),
+        postalCode: describeField(fields.zipInput),
+        country: describeField(fields.countryEl)
+      });
     }
     async function validateWithGeoapify(addr) {
       if (!CONFIG.apiKey) {
@@ -487,10 +531,12 @@
         const addr = readAddressFromDom();
         if (!addr) {
           log("Could not read address from DOM");
+          logDetectedFields("blur-no-address");
           return;
         }
         if (!isAddressComplete(addr)) {
           log("Address not complete yet — skipping", addr);
+          logDetectedFields("blur-incomplete");
           return;
         }
         if (isSameAddress(addr, SESSION.getLastValidated())) {
@@ -510,7 +556,7 @@
     }
     function isAddressField(el) {
       if (!(el == null ? void 0 : el.matches)) return false;
-      return el.matches('input[autocomplete="address-line1"]') || el.matches('input[name="street"]') || el.matches('input[autocomplete="address-level2"]') || el.matches('input[name="city"]') || el.matches('input[autocomplete="postal-code"]') || el.matches('input[name="postalCode"]');
+      return FIELD_SELECTORS.street.some((sel) => el.matches(sel)) || FIELD_SELECTORS.city.some((sel) => el.matches(sel)) || FIELD_SELECTORS.postalCode.some((sel) => el.matches(sel)) || FIELD_SELECTORS.country.some((sel) => el.matches(sel));
     }
     function onDocumentFocusOut(event) {
       if (!isAddressField(event.target)) return;
@@ -520,10 +566,16 @@
       if (!isAddressField(event.target)) return;
       onAddressFieldInput();
     }
+    function onDocumentChange(event) {
+      if (!isAddressField(event.target)) return;
+      log("Address field change detected", describeField(event.target));
+      onAddressFieldBlur();
+    }
     function ensureDocumentListeners() {
       if (documentListenersAttached) return;
       document.addEventListener("focusout", onDocumentFocusOut, true);
       document.addEventListener("input", onDocumentInput, true);
+      document.addEventListener("change", onDocumentChange, true);
       documentListenersAttached = true;
       log("Document-level address listeners attached");
     }
@@ -742,6 +794,7 @@
         onCheckoutAddressPage = true;
         if (!SESSION.isDisabled()) {
           ensureDocumentListeners();
+          logDetectedFields("page-loaded");
         } else {
           log("Validation disabled for session");
         }
@@ -760,7 +813,7 @@
     })();
   }
   const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
-  const BUNDLE_VERSION = "2026-03-20-address-full-1";
+  const BUNDLE_VERSION = "2026-03-20-address-full-2";
   function safeInit(name, init) {
     try {
       init();

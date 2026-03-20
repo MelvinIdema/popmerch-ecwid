@@ -19,6 +19,43 @@
  */
 
 export function initAddressValidation(config = {}) {
+  const FIELD_SELECTORS = {
+    street: [
+      'input[autocomplete="address-line1"]',
+      'input[name="street"]',
+      'input[name*="street" i]',
+      'input[id*="street" i]',
+      'input[name*="address" i]',
+      'input[id*="address" i]',
+    ],
+    city: [
+      'input[autocomplete="address-level2"]',
+      'input[name="city"]',
+      'input[name*="city" i]',
+      'input[id*="city" i]',
+      'input[name*="town" i]',
+      'input[id*="town" i]',
+    ],
+    postalCode: [
+      'input[autocomplete="postal-code"]',
+      'input[name="postalCode"]',
+      'input[name*="postal" i]',
+      'input[id*="postal" i]',
+      'input[name*="zip" i]',
+      'input[id*="zip" i]',
+    ],
+    country: [
+      'select[autocomplete="country"]',
+      'select[name="countryName"]',
+      'select[name*="country" i]',
+      'select[id*="country" i]',
+      'input[autocomplete="country-name"]',
+      'input[name="countryName"]',
+      'input[name*="country" i]',
+      'input[id*="country" i]',
+    ],
+  };
+
   // ===== Debug Infrastructure =====
 
   function isDebug() {
@@ -210,7 +247,7 @@ export function initAddressValidation(config = {}) {
   // ===== Address Utilities =====
 
   function isAddressComplete(addr) {
-    return !!(addr?.street && addr?.city && addr?.countryName);
+    return !!(addr?.street && addr?.city);
   }
 
   function addressKey(addr) {
@@ -247,24 +284,10 @@ export function initAddressValidation(config = {}) {
     };
 
     return {
-      streetInput: get([
-        'input[autocomplete="address-line1"]',
-        'input[name="street"]',
-      ]),
-      cityInput: get([
-        'input[autocomplete="address-level2"]',
-        'input[name="city"]',
-      ]),
-      zipInput: get([
-        'input[autocomplete="postal-code"]',
-        'input[name="postalCode"]',
-      ]),
-      countryEl: get([
-        'select[autocomplete="country"]',
-        'select[name="countryName"]',
-        'input[autocomplete="country-name"]',
-        'input[name="countryName"]',
-      ]),
+      streetInput: get(FIELD_SELECTORS.street),
+      cityInput: get(FIELD_SELECTORS.city),
+      zipInput: get(FIELD_SELECTORS.postalCode),
+      countryEl: get(FIELD_SELECTORS.country),
     };
   }
 
@@ -273,12 +296,40 @@ export function initAddressValidation(config = {}) {
 
     if (!streetInput && !cityInput) return null;
 
+    const countryName =
+      countryEl instanceof HTMLSelectElement
+        ? countryEl.selectedOptions?.[0]?.text?.trim() || countryEl.value?.trim() || ""
+        : countryEl?.value?.trim() || "";
+
     return {
       street: streetInput?.value?.trim() || "",
       city: cityInput?.value?.trim() || "",
       postalCode: zipInput?.value?.trim() || "",
-      countryName: countryEl?.value?.trim() || "",
+      countryName,
     };
+  }
+
+  function describeField(el) {
+    if (!el) return null;
+    return {
+      tag: el.tagName,
+      name: el.getAttribute("name"),
+      id: el.getAttribute("id"),
+      autocomplete: el.getAttribute("autocomplete"),
+      type: el.getAttribute("type"),
+      value: el.value,
+    };
+  }
+
+  function logDetectedFields(reason) {
+    if (!isDebug()) return;
+    const fields = getAddressDomFields();
+    log(`Detected address fields (${reason})`, {
+      street: describeField(fields.streetInput),
+      city: describeField(fields.cityInput),
+      postalCode: describeField(fields.zipInput),
+      country: describeField(fields.countryEl),
+    });
   }
 
   // ===== Geoapify API =====
@@ -511,10 +562,12 @@ export function initAddressValidation(config = {}) {
       const addr = readAddressFromDom();
       if (!addr) {
         log("Could not read address from DOM");
+        logDetectedFields("blur-no-address");
         return;
       }
       if (!isAddressComplete(addr)) {
         log("Address not complete yet — skipping", addr);
+        logDetectedFields("blur-incomplete");
         return;
       }
       if (isSameAddress(addr, SESSION.getLastValidated())) {
@@ -542,12 +595,10 @@ export function initAddressValidation(config = {}) {
   function isAddressField(el) {
     if (!el?.matches) return false;
     return (
-      el.matches('input[autocomplete="address-line1"]') ||
-      el.matches('input[name="street"]') ||
-      el.matches('input[autocomplete="address-level2"]') ||
-      el.matches('input[name="city"]') ||
-      el.matches('input[autocomplete="postal-code"]') ||
-      el.matches('input[name="postalCode"]')
+      FIELD_SELECTORS.street.some((sel) => el.matches(sel)) ||
+      FIELD_SELECTORS.city.some((sel) => el.matches(sel)) ||
+      FIELD_SELECTORS.postalCode.some((sel) => el.matches(sel)) ||
+      FIELD_SELECTORS.country.some((sel) => el.matches(sel))
     );
   }
 
@@ -561,10 +612,17 @@ export function initAddressValidation(config = {}) {
     onAddressFieldInput();
   }
 
+  function onDocumentChange(event) {
+    if (!isAddressField(event.target)) return;
+    log("Address field change detected", describeField(event.target));
+    onAddressFieldBlur();
+  }
+
   function ensureDocumentListeners() {
     if (documentListenersAttached) return;
     document.addEventListener("focusout", onDocumentFocusOut, true);
     document.addEventListener("input", onDocumentInput, true);
+    document.addEventListener("change", onDocumentChange, true);
     documentListenersAttached = true;
     log("Document-level address listeners attached");
   }
@@ -824,6 +882,7 @@ export function initAddressValidation(config = {}) {
       onCheckoutAddressPage = true;
       if (!SESSION.isDisabled()) {
         ensureDocumentListeners();
+        logDetectedFields("page-loaded");
       } else {
         log("Validation disabled for session");
       }
