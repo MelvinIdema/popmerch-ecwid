@@ -246,6 +246,12 @@ export function initUrlLocalization() {
       return;
     }
 
+    if (!document.body) {
+      logWarn("document.body not ready yet, retrying click handler setup");
+      window.addEventListener("DOMContentLoaded", setupClickHandler, { once: true });
+      return;
+    }
+
     log("Setting up click handler on document.body...");
 
     // Use capture phase to intercept before other handlers

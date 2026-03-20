@@ -124,6 +124,11 @@
         logWarn("CLICK_HANDLER step disabled");
         return;
       }
+      if (!document.body) {
+        logWarn("document.body not ready yet, retrying click handler setup");
+        window.addEventListener("DOMContentLoaded", setupClickHandler, { once: true });
+        return;
+      }
       log("Setting up click handler on document.body...");
       document.body.addEventListener("click", handleLinkClick, true);
       log("Click handler active ✓");
@@ -146,6 +151,13 @@
         return localStorage.getItem(`ADDR_STEP_${step}`) !== "false";
       } catch {
         return true;
+      }
+    }
+    function isModuleDisabled() {
+      try {
+        return localStorage.getItem("ADDR_DISABLED") === "true";
+      } catch {
+        return false;
       }
     }
     function log(msg, data = null) {
@@ -174,11 +186,16 @@
     log("=== Address Validation V1 ===");
     log("Config:", {
       apiKey: CONFIG.apiKey ? "***set***" : "(not set)",
+      ADDR_DISABLED: isModuleDisabled(),
       ADDR_DEBUG: isDebug(),
       ADDR_STEP_NORMALIZE: isStepEnabled("NORMALIZE"),
       ADDR_STEP_GEOAPIFY: isStepEnabled("GEOAPIFY"),
       ADDR_STEP_UI: isStepEnabled("UI")
     });
+    if (isModuleDisabled()) {
+      logWarn("Address validation module disabled via localStorage");
+      return;
+    }
     const SESSION = {
       DISABLED_KEY: "pm_addr_disabled",
       LAST_KEY: "pm_addr_last",
@@ -231,8 +248,7 @@
     };
     let state = "IDLE";
     let onCheckoutAddressPage = false;
-    let domObserver = null;
-    const attachedInputs = /* @__PURE__ */ new WeakSet();
+    let documentListenersAttached = false;
     let pendingSuggestion = null;
     async function waitForEcwid() {
       var _a, _b, _c, _d;
@@ -492,47 +508,24 @@
         hideAllUI();
       }
     }
-    function attachToAddressInputs() {
-      const candidates = [
-        document.querySelector('input[autocomplete="address-line1"]'),
-        document.querySelector('input[name="street"]'),
-        document.querySelector('input[autocomplete="address-level2"]'),
-        document.querySelector('input[name="city"]'),
-        document.querySelector('input[autocomplete="postal-code"]'),
-        document.querySelector('input[name="postalCode"]')
-      ].filter(Boolean);
-      let attached = 0;
-      for (const input of candidates) {
-        if (attachedInputs.has(input)) continue;
-        input.addEventListener("blur", onAddressFieldBlur);
-        input.addEventListener("input", onAddressFieldInput);
-        attachedInputs.add(input);
-        attached++;
-      }
-      if (attached > 0) log(`Attached listeners to ${attached} address input(s)`);
-      return candidates.length > 0;
+    function isAddressField(el) {
+      if (!(el == null ? void 0 : el.matches)) return false;
+      return el.matches('input[autocomplete="address-line1"]') || el.matches('input[name="street"]') || el.matches('input[autocomplete="address-level2"]') || el.matches('input[name="city"]') || el.matches('input[autocomplete="postal-code"]') || el.matches('input[name="postalCode"]');
     }
-    function startDomObserver() {
-      if (domObserver) domObserver.disconnect();
-      let scheduled = false;
-      domObserver = new MutationObserver(() => {
-        if (scheduled) return;
-        scheduled = true;
-        requestAnimationFrame(() => {
-          scheduled = false;
-          attachToAddressInputs();
-        });
-      });
-      domObserver.observe(document.body, { subtree: true, childList: true });
-      attachToAddressInputs();
-      log("DOM observer started");
+    function onDocumentFocusOut(event) {
+      if (!isAddressField(event.target)) return;
+      onAddressFieldBlur();
     }
-    function stopDomObserver() {
-      if (domObserver) {
-        domObserver.disconnect();
-        domObserver = null;
-        log("DOM observer stopped");
-      }
+    function onDocumentInput(event) {
+      if (!isAddressField(event.target)) return;
+      onAddressFieldInput();
+    }
+    function ensureDocumentListeners() {
+      if (documentListenersAttached) return;
+      document.addEventListener("focusout", onDocumentFocusOut, true);
+      document.addEventListener("input", onDocumentInput, true);
+      documentListenersAttached = true;
+      log("Document-level address listeners attached");
     }
     const BANNER_ID = "pm-addr-banner";
     function injectStyles() {
@@ -748,13 +741,12 @@
       if (isCheckoutAddress) {
         onCheckoutAddressPage = true;
         if (!SESSION.isDisabled()) {
-          startDomObserver();
+          ensureDocumentListeners();
         } else {
-          log("Validation disabled for session — not starting observer");
+          log("Validation disabled for session");
         }
       } else {
         onCheckoutAddressPage = false;
-        stopDomObserver();
         hideAllUI();
       }
     }
@@ -768,6 +760,17 @@
     })();
   }
   const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
-  initUrlLocalization();
-  initAddressValidation({ apiKey: GEOAPIFY_API_KEY });
+  function safeInit(name, init) {
+    try {
+      init();
+    } catch (err) {
+      console.error(`[Popmerch] Failed to initialize ${name}`, err);
+    }
+  }
+  safeInit("URL localization", () => {
+    initUrlLocalization();
+  });
+  safeInit("address validation", () => {
+    initAddressValidation({ apiKey: GEOAPIFY_API_KEY });
+  });
 })();
