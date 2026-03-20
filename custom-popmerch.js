@@ -238,7 +238,7 @@
       var _a, _b, _c, _d;
       const start = Date.now();
       while (Date.now() - start < CONFIG.pollTimeout) {
-        if (((_b = (_a = window.Ecwid) == null ? void 0 : _a.OnPageLoaded) == null ? void 0 : _b.add) && ((_d = (_c = window.Ecwid) == null ? void 0 : _c.Cart) == null ? void 0 : _d.get)) return;
+        if (((_b = (_a = window.Ecwid) == null ? void 0 : _a.OnAPILoaded) == null ? void 0 : _b.add) && ((_d = (_c = window.Ecwid) == null ? void 0 : _c.OnPageLoaded) == null ? void 0 : _d.add)) return;
         await new Promise((r) => setTimeout(r, CONFIG.pollInterval));
       }
       logError("Ecwid not available within timeout", new Error("timeout"));
@@ -268,8 +268,7 @@
     function escapeHtml(str) {
       return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
     }
-    function readAddressFromDom() {
-      var _a, _b, _c, _d;
+    function getAddressDomFields() {
       const get = (selectors) => {
         for (const sel of selectors) {
           const el = document.querySelector(sel);
@@ -277,24 +276,30 @@
         }
         return null;
       };
-      const streetInput = get([
-        'input[autocomplete="address-line1"]',
-        'input[name="street"]'
-      ]);
-      const cityInput = get([
-        'input[autocomplete="address-level2"]',
-        'input[name="city"]'
-      ]);
-      const zipInput = get([
-        'input[autocomplete="postal-code"]',
-        'input[name="postalCode"]'
-      ]);
-      const countryEl = get([
-        'select[autocomplete="country"]',
-        'select[name="countryName"]',
-        'input[autocomplete="country-name"]',
-        'input[name="countryName"]'
-      ]);
+      return {
+        streetInput: get([
+          'input[autocomplete="address-line1"]',
+          'input[name="street"]'
+        ]),
+        cityInput: get([
+          'input[autocomplete="address-level2"]',
+          'input[name="city"]'
+        ]),
+        zipInput: get([
+          'input[autocomplete="postal-code"]',
+          'input[name="postalCode"]'
+        ]),
+        countryEl: get([
+          'select[autocomplete="country"]',
+          'select[name="countryName"]',
+          'input[autocomplete="country-name"]',
+          'input[name="countryName"]'
+        ])
+      };
+    }
+    function readAddressFromDom() {
+      var _a, _b, _c, _d;
+      const { streetInput, cityInput, zipInput, countryEl } = getAddressDomFields();
       if (!streetInput && !cityInput) return null;
       return {
         street: ((_a = streetInput == null ? void 0 : streetInput.value) == null ? void 0 : _a.trim()) || "",
@@ -302,13 +307,6 @@
         postalCode: ((_c = zipInput == null ? void 0 : zipInput.value) == null ? void 0 : _c.trim()) || "",
         countryName: ((_d = countryEl == null ? void 0 : countryEl.value) == null ? void 0 : _d.trim()) || ""
       };
-    }
-    function getCartAddress() {
-      return new Promise((resolve) => {
-        window.Ecwid.Cart.get((cart) => {
-          resolve((cart == null ? void 0 : cart.shippingPerson) || {});
-        });
-      });
     }
     async function validateWithGeoapify(addr) {
       if (!CONFIG.apiKey) {
@@ -337,7 +335,7 @@
       const street = p.housenumber ? `${p.street || ""} ${p.housenumber}`.trim() : p.street || "";
       return {
         street: street || null,
-        city: p.city || null,
+        city: p.city || p.town || p.village || p.municipality || null,
         postalCode: p.postcode || null,
         countryName: p.country || null,
         confidence: ((_b = p.rank) == null ? void 0 : _b.confidence) ?? 0,
@@ -347,6 +345,57 @@
     function hasMeaningfulCorrection(input, suggestion) {
       const n = (v) => (v || "").toLowerCase().trim().replace(/\s+/g, " ");
       return suggestion.street && n(suggestion.street) !== n(input.street) || suggestion.city && n(suggestion.city) !== n(input.city) || suggestion.postalCode && n(suggestion.postalCode) !== n(input.postalCode);
+    }
+    function setFormControlValue(el, value) {
+      if (!el || value == null) return;
+      const prototype = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+      if (descriptor == null ? void 0 : descriptor.set) {
+        descriptor.set.call(el, value);
+      } else {
+        el.value = value;
+      }
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    function applySuggestionToDom(suggestion) {
+      const { streetInput, cityInput, zipInput, countryEl } = getAddressDomFields();
+      if (!streetInput && !cityInput && !zipInput && !countryEl) {
+        logWarn("Could not find checkout address inputs to apply correction");
+        return false;
+      }
+      if (suggestion.street && streetInput) {
+        setFormControlValue(streetInput, suggestion.street);
+      }
+      if (suggestion.city && cityInput) {
+        setFormControlValue(cityInput, suggestion.city);
+      }
+      if (suggestion.postalCode && zipInput) {
+        setFormControlValue(zipInput, suggestion.postalCode);
+      }
+      if (suggestion.countryName && countryEl) {
+        const normalize = (value) => (value || "").toLowerCase().trim().replace(/\s+/g, " ");
+        if (countryEl instanceof HTMLSelectElement) {
+          const match = Array.from(countryEl.options).find((option) => {
+            return normalize(option.value) === normalize(suggestion.countryName) || normalize(option.textContent) === normalize(suggestion.countryName);
+          });
+          if (match) {
+            setFormControlValue(countryEl, match.value);
+          } else {
+            logWarn("Skipping country overwrite: no matching Ecwid country option", {
+              suggestion: suggestion.countryName
+            });
+          }
+        } else if (!countryEl.value || normalize(countryEl.value) === normalize(suggestion.countryName)) {
+          setFormControlValue(countryEl, suggestion.countryName);
+        } else {
+          logWarn("Skipping country overwrite: current value differs from suggestion", {
+            current: countryEl.value,
+            suggestion: suggestion.countryName
+          });
+        }
+      }
+      return true;
     }
     async function triggerValidation(domAddr) {
       if (isStepEnabled("NORMALIZE")) {
@@ -682,20 +731,16 @@
     }
     async function onApplyCorrection(suggestion) {
       log("Applying correction", suggestion);
-      const currentAddr = await getCartAddress();
-      const merged = { ...currentAddr };
-      if (suggestion.street) merged.street = suggestion.street;
-      if (suggestion.city) merged.city = suggestion.city;
-      if (suggestion.postalCode) merged.postalCode = suggestion.postalCode;
-      if (suggestion.countryName) merged.countryName = suggestion.countryName;
+      const applied = applySuggestionToDom(suggestion);
+      if (!applied) return;
       SESSION.setSkipNext();
       state = "IDLE";
       hideAllUI();
-      window.Ecwid.Cart.setAddress(
-        merged,
-        () => log("Correction applied successfully"),
-        (err) => logError("Failed to apply correction", err)
-      );
+      const updatedAddr = readAddressFromDom();
+      if (updatedAddr) {
+        SESSION.setLastValidated(updatedAddr);
+      }
+      log("Correction applied to checkout form");
     }
     function onPageLoaded(page) {
       log("Page loaded", { type: page == null ? void 0 : page.type });
@@ -716,8 +761,10 @@
     log("Initializing Address Validation Module");
     (async () => {
       await waitForEcwid();
-      window.Ecwid.OnPageLoaded.add(onPageLoaded);
-      log("Address Validation Module initialized ✓");
+      window.Ecwid.OnAPILoaded.add(() => {
+        window.Ecwid.OnPageLoaded.add(onPageLoaded);
+        log("Address Validation Module initialized ✓");
+      });
     })();
   }
   const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";

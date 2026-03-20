@@ -155,7 +155,7 @@ export function initAddressValidation(config = {}) {
   async function waitForEcwid() {
     const start = Date.now();
     while (Date.now() - start < CONFIG.pollTimeout) {
-      if (window.Ecwid?.OnPageLoaded?.add && window.Ecwid?.Cart?.get) return;
+      if (window.Ecwid?.OnAPILoaded?.add && window.Ecwid?.OnPageLoaded?.add) return;
       await new Promise((r) => setTimeout(r, CONFIG.pollInterval));
     }
     logError("Ecwid not available within timeout", new Error("timeout"));
@@ -224,7 +224,7 @@ export function initAddressValidation(config = {}) {
    * Read current address values directly from the checkout form inputs.
    * More up-to-date than Ecwid.Cart.get() while the user is still typing.
    */
-  function readAddressFromDom() {
+  function getAddressDomFields() {
     const get = (selectors) => {
       for (const sel of selectors) {
         const el = document.querySelector(sel);
@@ -233,24 +233,30 @@ export function initAddressValidation(config = {}) {
       return null;
     };
 
-    const streetInput = get([
-      'input[autocomplete="address-line1"]',
-      'input[name="street"]',
-    ]);
-    const cityInput = get([
-      'input[autocomplete="address-level2"]',
-      'input[name="city"]',
-    ]);
-    const zipInput = get([
-      'input[autocomplete="postal-code"]',
-      'input[name="postalCode"]',
-    ]);
-    const countryEl = get([
-      'select[autocomplete="country"]',
-      'select[name="countryName"]',
-      'input[autocomplete="country-name"]',
-      'input[name="countryName"]',
-    ]);
+    return {
+      streetInput: get([
+        'input[autocomplete="address-line1"]',
+        'input[name="street"]',
+      ]),
+      cityInput: get([
+        'input[autocomplete="address-level2"]',
+        'input[name="city"]',
+      ]),
+      zipInput: get([
+        'input[autocomplete="postal-code"]',
+        'input[name="postalCode"]',
+      ]),
+      countryEl: get([
+        'select[autocomplete="country"]',
+        'select[name="countryName"]',
+        'input[autocomplete="country-name"]',
+        'input[name="countryName"]',
+      ]),
+    };
+  }
+
+  function readAddressFromDom() {
+    const { streetInput, cityInput, zipInput, countryEl } = getAddressDomFields();
 
     if (!streetInput && !cityInput) return null;
 
@@ -260,18 +266,6 @@ export function initAddressValidation(config = {}) {
       postalCode: zipInput?.value?.trim() || "",
       countryName: countryEl?.value?.trim() || "",
     };
-  }
-
-  /**
-   * Read the full current address from Ecwid.Cart (for the setAddress merge).
-   * We need ALL fields so setAddress() doesn't wipe name, phone, etc.
-   */
-  function getCartAddress() {
-    return new Promise((resolve) => {
-      window.Ecwid.Cart.get((cart) => {
-        resolve(cart?.shippingPerson || {});
-      });
-    });
   }
 
   // ===== Geoapify API =====
@@ -310,7 +304,7 @@ export function initAddressValidation(config = {}) {
       : p.street || "";
     return {
       street: street || null,
-      city: p.city || null,
+      city: p.city || p.town || p.village || p.municipality || null,
       postalCode: p.postcode || null,
       countryName: p.country || null,
       confidence: p.rank?.confidence ?? 0,
@@ -325,6 +319,85 @@ export function initAddressValidation(config = {}) {
       (suggestion.city && n(suggestion.city) !== n(input.city)) ||
       (suggestion.postalCode && n(suggestion.postalCode) !== n(input.postalCode))
     );
+  }
+
+  function setFormControlValue(el, value) {
+    if (!el || value == null) return;
+
+    const prototype =
+      el instanceof HTMLSelectElement
+        ? HTMLSelectElement.prototype
+        : HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
+
+    if (descriptor?.set) {
+      descriptor.set.call(el, value);
+    } else {
+      el.value = value;
+    }
+
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function applySuggestionToDom(suggestion) {
+    const { streetInput, cityInput, zipInput, countryEl } = getAddressDomFields();
+
+    if (!streetInput && !cityInput && !zipInput && !countryEl) {
+      logWarn("Could not find checkout address inputs to apply correction");
+      return false;
+    }
+
+    if (suggestion.street && streetInput) {
+      setFormControlValue(streetInput, suggestion.street);
+    }
+
+    if (suggestion.city && cityInput) {
+      setFormControlValue(cityInput, suggestion.city);
+    }
+
+    if (suggestion.postalCode && zipInput) {
+      setFormControlValue(zipInput, suggestion.postalCode);
+    }
+
+    // Geoapify country labels may not match Ecwid's localized select labels exactly.
+    // Avoid forcing a country rewrite unless we can match an existing option safely.
+    if (suggestion.countryName && countryEl) {
+      const normalize = (value) =>
+        (value || "")
+          .toLowerCase()
+          .trim()
+          .replace(/\s+/g, " ");
+
+      if (countryEl instanceof HTMLSelectElement) {
+        const match = Array.from(countryEl.options).find((option) => {
+          return (
+            normalize(option.value) === normalize(suggestion.countryName) ||
+            normalize(option.textContent) === normalize(suggestion.countryName)
+          );
+        });
+
+        if (match) {
+          setFormControlValue(countryEl, match.value);
+        } else {
+          logWarn("Skipping country overwrite: no matching Ecwid country option", {
+            suggestion: suggestion.countryName,
+          });
+        }
+      } else if (
+        !countryEl.value ||
+        normalize(countryEl.value) === normalize(suggestion.countryName)
+      ) {
+        setFormControlValue(countryEl, suggestion.countryName);
+      } else {
+        logWarn("Skipping country overwrite: current value differs from suggestion", {
+          current: countryEl.value,
+          suggestion: suggestion.countryName,
+        });
+      }
+    }
+
+    return true;
   }
 
   // ===== Main Validation Flow =====
@@ -732,26 +805,19 @@ export function initAddressValidation(config = {}) {
 
   async function onApplyCorrection(suggestion) {
     log("Applying correction", suggestion);
+    const applied = applySuggestionToDom(suggestion);
+    if (!applied) return;
 
-    // Fetch the full current address so we don't accidentally clear name, phone, etc.
-    const currentAddr = await getCartAddress();
-
-    const merged = { ...currentAddr };
-    if (suggestion.street) merged.street = suggestion.street;
-    if (suggestion.city) merged.city = suggestion.city;
-    if (suggestion.postalCode) merged.postalCode = suggestion.postalCode;
-    if (suggestion.countryName) merged.countryName = suggestion.countryName;
-
-    // Prevent the programmatic setAddress from triggering another validation run
+    // Prevent the programmatic DOM update from triggering another validation run.
     SESSION.setSkipNext();
     state = "IDLE";
     hideAllUI();
 
-    window.Ecwid.Cart.setAddress(
-      merged,
-      () => log("Correction applied successfully"),
-      (err) => logError("Failed to apply correction", err)
-    );
+    const updatedAddr = readAddressFromDom();
+    if (updatedAddr) {
+      SESSION.setLastValidated(updatedAddr);
+    }
+    log("Correction applied to checkout form");
   }
 
   // ===== Page Event Handlers =====
@@ -782,7 +848,9 @@ export function initAddressValidation(config = {}) {
 
   (async () => {
     await waitForEcwid();
-    window.Ecwid.OnPageLoaded.add(onPageLoaded);
-    log("Address Validation Module initialized ✓");
+    window.Ecwid.OnAPILoaded.add(() => {
+      window.Ecwid.OnPageLoaded.add(onPageLoaded);
+      log("Address Validation Module initialized ✓");
+    });
   })();
 }
