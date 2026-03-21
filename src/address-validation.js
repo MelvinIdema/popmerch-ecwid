@@ -122,13 +122,13 @@ export function initAddressValidation(config = {}) {
       correctionTitle: "Adres automatisch gecorrigeerd",
       correctionBody:
         "We hebben de adresnotatie verbeterd op basis van een bekende locatie. Je kunt dit nog ongedaan maken voordat je doorgaat.",
-      warningTitle: "We konden dit adres niet goed verifieren",
+      warningTitle: "We konden dit adres niet verifieren",
       warningBody:
-        "Controleer het adres nog een keer. Als het toch klopt, kun je gewoon doorgaan.",
+        "Dit adres lijkt niet te bestaan of is te onzeker. Pas het adres aan voordat je verdergaat naar de verzendmethodes.",
       continueCorrected: "Doorgaan met gecorrigeerd adres",
       undoCorrection: "Correctie ongedaan maken",
-      useOriginal: "Mijn adres klopt",
       edit: "Adres aanpassen",
+      backToCart: "Terug naar winkelwagen",
       genericError: "Er ging iets mis. Probeer het opnieuw.",
       saveError:
         "Het adres kon niet in Ecwid worden opgeslagen. Probeer het opnieuw.",
@@ -158,11 +158,11 @@ export function initAddressValidation(config = {}) {
         "We improved the address format based on a known location. You can still undo this before continuing.",
       warningTitle: "We could not confidently verify this address",
       warningBody:
-        "Please check the address once more. If it is still correct, you can continue anyway.",
+        "This address appears invalid or too uncertain. Please fix the address before continuing to shipping methods.",
       continueCorrected: "Continue with corrected address",
       undoCorrection: "Undo correction",
-      useOriginal: "My address is correct",
       edit: "Edit address",
+      backToCart: "Back to cart",
       genericError: "Something went wrong. Please try again.",
       saveError: "We could not save the address in Ecwid. Please try again.",
       requiredField: "Please fill in all required fields.",
@@ -191,11 +191,11 @@ export function initAddressValidation(config = {}) {
         "Wir haben die Adressnotation anhand einer bekannten Adresse verbessert. Du kannst das vor dem Weitergehen noch rueckgaengig machen.",
       warningTitle: "Wir konnten diese Adresse nicht sicher pruefen",
       warningBody:
-        "Bitte pruefe die Adresse noch einmal. Wenn sie trotzdem korrekt ist, kannst du fortfahren.",
+        "Diese Adresse scheint ungueltig oder zu unsicher zu sein. Bitte korrigiere sie, bevor du zu den Versandarten weitergehst.",
       continueCorrected: "Mit korrigierter Adresse weiter",
       undoCorrection: "Korrektur rueckgaengig machen",
-      useOriginal: "Meine Adresse stimmt",
       edit: "Adresse bearbeiten",
+      backToCart: "Zurueck zum Warenkorb",
       genericError: "Etwas ist schiefgelaufen. Bitte versuche es erneut.",
       saveError:
         "Die Adresse konnte nicht in Ecwid gespeichert werden. Bitte versuche es erneut.",
@@ -655,11 +655,11 @@ export function initAddressValidation(config = {}) {
         </div>
         <div class="pm-addr-body">
           <div class="pm-addr-actions">
+            <button type="button" class="pm-addr-button pm-addr-button--ghost" data-action="close">${escapeHtml(
+              t("backToCart")
+            )}</button>
             <button type="button" class="pm-addr-button pm-addr-button--ghost" data-action="edit-address">${escapeHtml(
               t("edit")
-            )}</button>
-            <button type="button" class="pm-addr-button pm-addr-button--primary" data-action="use-original">${escapeHtml(
-              t("useOriginal")
             )}</button>
           </div>
         </div>
