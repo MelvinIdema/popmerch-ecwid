@@ -1072,6 +1072,7 @@
       "it-CH": "CHF"
     };
     const ZERO_DECIMAL = /* @__PURE__ */ new Set(["JPY", "HUF"]);
+    let cachedRates = null;
     function isDebug() {
       try {
         return localStorage.getItem("CURRENCY_DEBUG") === "true";
@@ -1184,6 +1185,53 @@
         return `${((_a2 = CURRENCIES[currency]) == null ? void 0 : _a2.symbol) || currency} ${amount.toFixed(decimals)}`;
       }
     }
+    function setPriceText(el, text) {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+        acceptNode: (node) => /\d/.test(node.textContent) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP
+      });
+      const textNode = walker.nextNode();
+      if (textNode) {
+        textNode.textContent = text;
+      } else {
+        el.textContent = text;
+      }
+    }
+    function convertAllPrices(currency, rates) {
+      const priceEls = document.querySelectorAll('[itemprop="price"][content]');
+      log(`Converting ${priceEls.length} price element(s) to ${currency}`);
+      for (const el of priceEls) {
+        const basePrice = parseFloat(el.getAttribute("content"));
+        if (isNaN(basePrice) || basePrice <= 0) continue;
+        const amount = convertPrice(basePrice, currency, rates);
+        if (amount === null) continue;
+        setPriceText(el, formatPrice(amount, currency));
+      }
+    }
+    function watchForNewPrices() {
+      const observer = new MutationObserver((mutations) => {
+        if (!cachedRates) return;
+        const currency = getSelectedCurrency();
+        if (currency === BASE_CURRENCY) return;
+        for (const mutation of mutations) {
+          for (const node of mutation.addedNodes) {
+            if (node.nodeType !== Node.ELEMENT_NODE) continue;
+            const candidates = node.matches("[itemprop='price'][content]") ? [node] : [...node.querySelectorAll("[itemprop='price'][content]")];
+            for (const el of candidates) {
+              const basePrice = parseFloat(el.getAttribute("content"));
+              if (isNaN(basePrice) || basePrice <= 0) continue;
+              const amount = convertPrice(basePrice, currency, cachedRates);
+              if (amount !== null) setPriceText(el, formatPrice(amount, currency));
+            }
+          }
+        }
+      });
+      const attach = () => observer.observe(document.body, { childList: true, subtree: true });
+      if (document.body) {
+        attach();
+      } else {
+        document.addEventListener("DOMContentLoaded", attach, { once: true });
+      }
+    }
     function injectStyles() {
       if (document.getElementById(STYLES_ID)) return;
       const style = document.createElement("style");
@@ -1249,17 +1297,6 @@
         line-height: 1;
       }
 
-      #pm-currency-switcher .pm-currency__converted {
-        font-size: 13px;
-        color: #666;
-        font-style: italic;
-        white-space: nowrap;
-      }
-
-      #pm-currency-switcher .pm-currency__converted:empty {
-        display: none;
-      }
-
       /* ── Announcement bar selector ── */
       .announcement-bar__currency .pm-currency__bar-wrap {
         position: relative;
@@ -1318,8 +1355,11 @@
       for (const fn of syncListeners) {
         if (fn !== source) fn(currency);
       }
+      if (cachedRates) {
+        convertAllPrices(currency, cachedRates);
+      }
     }
-    async function mountInlineSwitcher(basePrice, insertBeforeEl) {
+    function mountInlineSwitcher(insertBeforeEl) {
       if (document.getElementById(INLINE_ID)) return;
       const selectedCurrency = getSelectedCurrency();
       injectStyles();
@@ -1338,37 +1378,18 @@
       arrow.className = "pm-currency__arrow";
       arrow.setAttribute("aria-hidden", "true");
       arrow.textContent = "▼";
-      const converted = document.createElement("span");
-      converted.className = "pm-currency__converted";
       selectWrap.appendChild(select);
       selectWrap.appendChild(arrow);
       wrapper.appendChild(label);
       wrapper.appendChild(selectWrap);
-      wrapper.appendChild(converted);
       insertBeforeEl.parentNode.insertBefore(wrapper, insertBeforeEl);
-      log("Inline switcher mounted", { basePrice, selectedCurrency });
-      const rates = await fetchRates();
-      function updateDisplay(currency) {
-        if (!rates || currency === BASE_CURRENCY) {
-          converted.textContent = "";
-          return;
-        }
-        const amount = convertPrice(basePrice, currency, rates);
-        if (amount === null) {
-          converted.textContent = "";
-          return;
-        }
-        converted.textContent = `≈ ${formatPrice(amount, currency)}`;
-      }
+      log("Inline switcher mounted", { selectedCurrency });
       const syncFn = (currency) => {
         select.value = currency;
-        updateDisplay(currency);
       };
       syncListeners.add(syncFn);
-      updateDisplay(selectedCurrency);
       select.addEventListener("change", () => {
         onCurrencyChange(select.value, syncFn);
-        updateDisplay(select.value);
       });
     }
     function mountBarSwitcher() {
@@ -1402,13 +1423,6 @@
           syncListeners.add(syncFn);
           select.addEventListener("change", () => {
             onCurrencyChange(select.value, syncFn);
-            const inlineSelect = document.querySelector(
-              "#pm-currency-switcher .pm-currency__select"
-            );
-            if (inlineSelect && inlineSelect.value !== select.value) {
-              inlineSelect.value = select.value;
-              inlineSelect.dispatchEvent(new Event("change"));
-            }
           });
           return;
         }
@@ -1432,34 +1446,34 @@
       let attempts = 0;
       const poll = setInterval(() => {
         attempts++;
-        const priceEl = document.querySelector(
-          '.product-details__product-price[itemprop="price"][content]'
-        );
         const priceRow = document.querySelector(".product-details__product-price-row");
-        if (priceEl && priceRow) {
+        if (priceRow) {
           clearInterval(poll);
-          const basePrice = parseFloat(priceEl.getAttribute("content"));
-          if (isNaN(basePrice) || basePrice <= 0) {
-            log("Invalid price content attribute", priceEl.getAttribute("content"));
-            return;
+          mountInlineSwitcher(priceRow);
+          if (cachedRates) {
+            convertAllPrices(getSelectedCurrency(), cachedRates);
           }
-          log("Price found", { basePrice, priceRow });
-          mountInlineSwitcher(basePrice, priceRow).catch((err) => {
-            logError("Failed to mount inline switcher", err);
-          });
           return;
         }
         if (attempts >= POLL_MAX_ATTEMPTS) {
           clearInterval(poll);
-          log("Price element not found after polling");
+          log("Price row not found after polling");
         }
       }, POLL_INTERVAL);
     }
     mountBarSwitcher();
+    watchForNewPrices();
+    fetchRates().then((rates) => {
+      if (!rates) return;
+      cachedRates = rates;
+      convertAllPrices(getSelectedCurrency(), rates);
+    });
     (_b = (_a = window.Ecwid) == null ? void 0 : _a.OnPageLoaded) == null ? void 0 : _b.add(function(page) {
       log("Page loaded", page.type);
       if (page.type === "PRODUCT") {
         handleProductPage();
+      } else if (cachedRates) {
+        setTimeout(() => convertAllPrices(getSelectedCurrency(), cachedRates), 150);
       }
     });
     log("Currency switcher initialised");

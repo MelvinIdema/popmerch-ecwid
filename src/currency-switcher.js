@@ -54,6 +54,9 @@ export function initCurrencySwitcher(config = {}) {
 
   const ZERO_DECIMAL = new Set(["JPY", "HUF"]);
 
+  // Shared mutable state within this closure
+  let cachedRates = null;
+
   // ─── Debug ────────────────────────────────────────────────────────────────
 
   function isDebug() {
@@ -185,6 +188,73 @@ export function initCurrencySwitcher(config = {}) {
     }
   }
 
+  // ─── Price replacement ────────────────────────────────────────────────────
+
+  // Replace the visible price text without destroying child element structure.
+  // We walk text nodes and replace the first one that contains digits (the price).
+  // Using TreeWalker (characterData mutation) avoids triggering our childList
+  // MutationObserver, preventing any feedback loop.
+  function setPriceText(el, text) {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+      acceptNode: (node) =>
+        /\d/.test(node.textContent) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+    });
+    const textNode = walker.nextNode();
+    if (textNode) {
+      textNode.textContent = text;
+    } else {
+      el.textContent = text;
+    }
+  }
+
+  // Convert (or restore) every [itemprop="price"][content] element on the page.
+  // The `content` attribute always holds the original EUR value set by Ecwid,
+  // so we can safely re-derive the base price at any time.
+  function convertAllPrices(currency, rates) {
+    const priceEls = document.querySelectorAll('[itemprop="price"][content]');
+    log(`Converting ${priceEls.length} price element(s) to ${currency}`);
+    for (const el of priceEls) {
+      const basePrice = parseFloat(el.getAttribute("content"));
+      if (isNaN(basePrice) || basePrice <= 0) continue;
+      const amount = convertPrice(basePrice, currency, rates);
+      if (amount === null) continue;
+      setPriceText(el, formatPrice(amount, currency));
+    }
+  }
+
+  // Watch for price elements added by Ecwid's SPA navigation and convert them.
+  function watchForNewPrices() {
+    const observer = new MutationObserver((mutations) => {
+      if (!cachedRates) return;
+      const currency = getSelectedCurrency();
+      if (currency === BASE_CURRENCY) return;
+
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+          const candidates = node.matches("[itemprop='price'][content]")
+            ? [node]
+            : [...node.querySelectorAll("[itemprop='price'][content]")];
+          for (const el of candidates) {
+            const basePrice = parseFloat(el.getAttribute("content"));
+            if (isNaN(basePrice) || basePrice <= 0) continue;
+            const amount = convertPrice(basePrice, currency, cachedRates);
+            if (amount !== null) setPriceText(el, formatPrice(amount, currency));
+          }
+        }
+      }
+    });
+
+    const attach = () =>
+      observer.observe(document.body, { childList: true, subtree: true });
+
+    if (document.body) {
+      attach();
+    } else {
+      document.addEventListener("DOMContentLoaded", attach, { once: true });
+    }
+  }
+
   // ─── Styles ───────────────────────────────────────────────────────────────
 
   function injectStyles() {
@@ -250,17 +320,6 @@ export function initCurrencySwitcher(config = {}) {
         color: #888;
         font-size: 9px;
         line-height: 1;
-      }
-
-      #pm-currency-switcher .pm-currency__converted {
-        font-size: 13px;
-        color: #666;
-        font-style: italic;
-        white-space: nowrap;
-      }
-
-      #pm-currency-switcher .pm-currency__converted:empty {
-        display: none;
       }
 
       /* ── Announcement bar selector ── */
@@ -329,11 +388,14 @@ export function initCurrencySwitcher(config = {}) {
     for (const fn of syncListeners) {
       if (fn !== source) fn(currency);
     }
+    if (cachedRates) {
+      convertAllPrices(currency, cachedRates);
+    }
   }
 
   // ─── Inline product-page switcher ────────────────────────────────────────
 
-  async function mountInlineSwitcher(basePrice, insertBeforeEl) {
+  function mountInlineSwitcher(insertBeforeEl) {
     if (document.getElementById(INLINE_ID)) return;
 
     const selectedCurrency = getSelectedCurrency();
@@ -359,45 +421,21 @@ export function initCurrencySwitcher(config = {}) {
     arrow.setAttribute("aria-hidden", "true");
     arrow.textContent = "▼";
 
-    const converted = document.createElement("span");
-    converted.className = "pm-currency__converted";
-
     selectWrap.appendChild(select);
     selectWrap.appendChild(arrow);
     wrapper.appendChild(label);
     wrapper.appendChild(selectWrap);
-    wrapper.appendChild(converted);
 
     insertBeforeEl.parentNode.insertBefore(wrapper, insertBeforeEl);
-    log("Inline switcher mounted", { basePrice, selectedCurrency });
+    log("Inline switcher mounted", { selectedCurrency });
 
-    const rates = await fetchRates();
-
-    function updateDisplay(currency) {
-      if (!rates || currency === BASE_CURRENCY) {
-        converted.textContent = "";
-        return;
-      }
-      const amount = convertPrice(basePrice, currency, rates);
-      if (amount === null) {
-        converted.textContent = "";
-        return;
-      }
-      converted.textContent = `≈ ${formatPrice(amount, currency)}`;
-    }
-
-    // Register as sync listener so bar changes update this too
     const syncFn = (currency) => {
       select.value = currency;
-      updateDisplay(currency);
     };
     syncListeners.add(syncFn);
 
-    updateDisplay(selectedCurrency);
-
     select.addEventListener("change", () => {
       onCurrencyChange(select.value, syncFn);
-      updateDisplay(select.value);
     });
   }
 
@@ -441,7 +479,6 @@ export function initCurrencySwitcher(config = {}) {
 
         log("Bar switcher mounted", selectedCurrency);
 
-        // Register as sync listener
         const syncFn = (currency) => {
           select.value = currency;
         };
@@ -449,14 +486,6 @@ export function initCurrencySwitcher(config = {}) {
 
         select.addEventListener("change", () => {
           onCurrencyChange(select.value, syncFn);
-          // Also trigger the inline switcher's change if it exists
-          const inlineSelect = document.querySelector(
-            "#pm-currency-switcher .pm-currency__select",
-          );
-          if (inlineSelect && inlineSelect.value !== select.value) {
-            inlineSelect.value = select.value;
-            inlineSelect.dispatchEvent(new Event("change"));
-          }
         });
         return;
       }
@@ -490,29 +519,21 @@ export function initCurrencySwitcher(config = {}) {
     const poll = setInterval(() => {
       attempts++;
 
-      // Primary: use the itemprop="price" with content attribute — exact numeric value
-      const priceEl = document.querySelector(
-        '.product-details__product-price[itemprop="price"][content]',
-      );
       const priceRow = document.querySelector(".product-details__product-price-row");
 
-      if (priceEl && priceRow) {
+      if (priceRow) {
         clearInterval(poll);
-        const basePrice = parseFloat(priceEl.getAttribute("content"));
-        if (isNaN(basePrice) || basePrice <= 0) {
-          log("Invalid price content attribute", priceEl.getAttribute("content"));
-          return;
+        mountInlineSwitcher(priceRow);
+        // Price elements are now present — apply conversion immediately
+        if (cachedRates) {
+          convertAllPrices(getSelectedCurrency(), cachedRates);
         }
-        log("Price found", { basePrice, priceRow });
-        mountInlineSwitcher(basePrice, priceRow).catch((err) => {
-          logError("Failed to mount inline switcher", err);
-        });
         return;
       }
 
       if (attempts >= POLL_MAX_ATTEMPTS) {
         clearInterval(poll);
-        log("Price element not found after polling");
+        log("Price row not found after polling");
       }
     }, POLL_INTERVAL);
   }
@@ -522,11 +543,24 @@ export function initCurrencySwitcher(config = {}) {
   // Announcement bar is persistent across pages — mount once
   mountBarSwitcher();
 
+  // Watch for prices added by SPA navigation
+  watchForNewPrices();
+
+  // Fetch rates once; convert any prices already on the page
+  fetchRates().then((rates) => {
+    if (!rates) return;
+    cachedRates = rates;
+    convertAllPrices(getSelectedCurrency(), rates);
+  });
+
   // Product page inline switcher — mount on each product page load
   window.Ecwid?.OnPageLoaded?.add(function (page) {
     log("Page loaded", page.type);
     if (page.type === "PRODUCT") {
       handleProductPage();
+    } else if (cachedRates) {
+      // Re-convert prices on listing/category/search pages after Ecwid renders them
+      setTimeout(() => convertAllPrices(getSelectedCurrency(), cachedRates), 150);
     }
   });
 
