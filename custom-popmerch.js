@@ -811,7 +811,6 @@
     function scheduleValidation() {
       if (!state.onCheckoutAddressPage) return;
       clearTimeout(state.debounceTimer);
-      state.acceptedFingerprint = "";
       state.pendingSuggestion = null;
       setUiState("idle");
       state.debounceTimer = setTimeout(() => {
@@ -899,11 +898,17 @@
       }
       injectStyles();
       ensureInlineBox();
+      const previousFingerprint = state.acceptedFingerprint;
       state.acceptedFingerprint = "";
       state.pendingSuggestion = null;
       state.originalAddress = null;
       setUiState("idle");
       const currentAddress = readAddressFromDom();
+      if (previousFingerprint && currentAddress && isAddressComplete(currentAddress) && fingerprintAddress(normalizeAddress(currentAddress)) === previousFingerprint) {
+        state.acceptedFingerprint = previousFingerprint;
+        setUiState("valid");
+        return;
+      }
       if (currentAddress && isAddressComplete(currentAddress)) {
         clearTimeout(state.debounceTimer);
         state.debounceTimer = setTimeout(() => {

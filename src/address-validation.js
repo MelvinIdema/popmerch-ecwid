@@ -807,7 +807,10 @@ export function initAddressValidation(config = {}) {
   function scheduleValidation() {
     if (!state.onCheckoutAddressPage) return;
     clearTimeout(state.debounceTimer);
-    state.acceptedFingerprint = "";
+    // Do NOT clear acceptedFingerprint here — applySuggestionToDom fires input/change
+    // events synchronously, so clearing it here causes the debounce to re-validate an
+    // address that was just accepted. runValidationNow compares fingerprints and skips
+    // the API call when the address hasn't actually changed.
     state.pendingSuggestion = null;
     setUiState("idle");
     state.debounceTimer = setTimeout(() => {
@@ -912,12 +915,29 @@ export function initAddressValidation(config = {}) {
 
     injectStyles();
     ensureInlineBox();
+
+    const previousFingerprint = state.acceptedFingerprint;
     state.acceptedFingerprint = "";
     state.pendingSuggestion = null;
     state.originalAddress = null;
     setUiState("idle");
 
     const currentAddress = readAddressFromDom();
+
+    // Ecwid can re-fire OnPageLoaded after a country-select change while we are
+    // applying a suggestion.  If the DOM still matches what was just accepted,
+    // restore the valid state immediately instead of kicking off another round-trip.
+    if (
+      previousFingerprint &&
+      currentAddress &&
+      isAddressComplete(currentAddress) &&
+      fingerprintAddress(normalizeAddress(currentAddress)) === previousFingerprint
+    ) {
+      state.acceptedFingerprint = previousFingerprint;
+      setUiState("valid");
+      return;
+    }
+
     if (currentAddress && isAddressComplete(currentAddress)) {
       clearTimeout(state.debounceTimer);
       state.debounceTimer = setTimeout(() => {
