@@ -177,6 +177,7 @@
       error: "",
       loadingMessage: "",
       formData: null,
+      originalAddress: null,
       normalizedAddress: null,
       suggestedAddress: null
     };
@@ -238,11 +239,12 @@
         continue: "Controleer en ga door",
         loadingValidate: "Adres wordt gecontroleerd...",
         loadingSave: "Gegevens worden opgeslagen...",
-        correctionTitle: "We vonden een betere adresnotatie",
-        correctionBody: "Dit adres lijkt beter aan te sluiten op een bekende locatie. Wil je deze versie gebruiken?",
+        correctionTitle: "Adres automatisch gecorrigeerd",
+        correctionBody: "We hebben de adresnotatie verbeterd op basis van een bekende locatie. Je kunt dit nog ongedaan maken voordat je doorgaat.",
         warningTitle: "We konden dit adres niet goed verifieren",
         warningBody: "Controleer het adres nog een keer. Als het toch klopt, kun je gewoon doorgaan.",
-        useCorrected: "Gebruik gecorrigeerd adres",
+        continueCorrected: "Doorgaan met gecorrigeerd adres",
+        undoCorrection: "Correctie ongedaan maken",
         useOriginal: "Mijn adres klopt",
         edit: "Adres aanpassen",
         genericError: "Er ging iets mis. Probeer het opnieuw.",
@@ -267,11 +269,12 @@
         continue: "Validate and continue",
         loadingValidate: "Validating address...",
         loadingSave: "Saving details...",
-        correctionTitle: "We found a better address format",
-        correctionBody: "This version looks closer to a known address. Do you want to use it?",
+        correctionTitle: "Address corrected automatically",
+        correctionBody: "We improved the address format based on a known location. You can still undo this before continuing.",
         warningTitle: "We could not confidently verify this address",
         warningBody: "Please check the address once more. If it is still correct, you can continue anyway.",
-        useCorrected: "Use corrected address",
+        continueCorrected: "Continue with corrected address",
+        undoCorrection: "Undo correction",
         useOriginal: "My address is correct",
         edit: "Edit address",
         genericError: "Something went wrong. Please try again.",
@@ -296,11 +299,12 @@
         continue: "Pruefen und weiter",
         loadingValidate: "Adresse wird geprueft...",
         loadingSave: "Daten werden gespeichert...",
-        correctionTitle: "Wir haben eine bessere Adressnotation gefunden",
-        correctionBody: "Diese Version passt besser zu einer bekannten Adresse. Moechtest du sie verwenden?",
+        correctionTitle: "Adresse automatisch korrigiert",
+        correctionBody: "Wir haben die Adressnotation anhand einer bekannten Adresse verbessert. Du kannst das vor dem Weitergehen noch rueckgaengig machen.",
         warningTitle: "Wir konnten diese Adresse nicht sicher pruefen",
         warningBody: "Bitte pruefe die Adresse noch einmal. Wenn sie trotzdem korrekt ist, kannst du fortfahren.",
-        useCorrected: "Korrigierte Adresse verwenden",
+        continueCorrected: "Mit korrigierter Adresse weiter",
+        undoCorrection: "Korrektur rueckgaengig machen",
         useOriginal: "Meine Adresse stimmt",
         edit: "Adresse bearbeiten",
         genericError: "Etwas ist schiefgelaufen. Bitte versuche es erneut.",
@@ -679,7 +683,7 @@
       `;
         return;
       }
-      if (state.mode === "correction") {
+      if (state.mode === "corrected") {
         dialog.innerHTML = `
         <button type="button" class="pm-addr-close" data-action="close" aria-label="${escapeHtml(
           t("closeLabel")
@@ -700,11 +704,11 @@
             <button type="button" class="pm-addr-button pm-addr-button--ghost" data-action="edit-address">${escapeHtml(
           t("edit")
         )}</button>
-            <button type="button" class="pm-addr-button pm-addr-button--ghost" data-action="use-original">${escapeHtml(
-          t("useOriginal")
+            <button type="button" class="pm-addr-button pm-addr-button--ghost" data-action="undo-correction">${escapeHtml(
+          t("undoCorrection")
         )}</button>
-            <button type="button" class="pm-addr-button pm-addr-button--primary" data-action="use-corrected">${escapeHtml(
-          t("useCorrected")
+            <button type="button" class="pm-addr-button pm-addr-button--primary" data-action="continue-corrected">${escapeHtml(
+          t("continueCorrected")
         )}</button>
           </div>
         </div>
@@ -856,6 +860,7 @@
       state.mode = "form";
       state.error = "";
       state.loadingMessage = "";
+      state.originalAddress = null;
     }
     async function loadPrefill() {
       const cart = await getCart();
@@ -949,8 +954,11 @@
           suggestion: mergedSuggestion
         });
         if (mergedSuggestion && suggestion.rankConfidence >= CONFIG.confidenceClean && hasMeaningfulCorrection(normalizedAddress, mergedSuggestion)) {
+          state.originalAddress = normalizedAddress;
+          state.formData = mergedSuggestion;
           state.suggestedAddress = mergedSuggestion;
-          state.mode = "correction";
+          state.normalizedAddress = normalizedAddress;
+          state.mode = "corrected";
           renderModal();
           return;
         }
@@ -991,10 +999,19 @@
         renderModal();
         return;
       }
-      if (action === "use-corrected" && state.suggestedAddress) {
+      if (action === "continue-corrected" && state.suggestedAddress) {
         commitPrecheckoutData(state.suggestedAddress, { allowFallback: true }).catch((error) => {
           logError("Failed to commit corrected address", error);
         });
+        return;
+      }
+      if (action === "undo-correction" && state.originalAddress) {
+        state.formData = state.originalAddress;
+        state.normalizedAddress = state.originalAddress;
+        state.suggestedAddress = null;
+        state.mode = "form";
+        state.error = "";
+        renderModal();
         return;
       }
       if (action === "use-original" && state.normalizedAddress) {
@@ -1045,6 +1062,10 @@
         text: parts.join(", "),
         limit: "1",
         apiKey: CONFIG.apiKey
+      });
+      log("Calling Geoapify", {
+        text: parts.join(", "),
+        url: `https://api.geoapify.com/v1/geocode/search?${params}`
       });
       return fetch(`https://api.geoapify.com/v1/geocode/search?${params}`).then(
         async (response) => {
@@ -1145,21 +1166,27 @@
       ADDR_STEP_NORMALIZE: isStepEnabled("NORMALIZE"),
       ADDR_STEP_GEOAPIFY: isStepEnabled("GEOAPIFY")
     });
+    function initializeModule() {
+      ensureDocumentListeners();
+      window.Ecwid.OnPageLoaded.add(onPageLoaded);
+      const onCartDom = document.querySelector(".ec-cart") || document.querySelector(".ecwid-productBrowser-Page-cart") || window.location.pathname.includes("/cart");
+      if (onCartDom) {
+        state.onCartPage = true;
+        log("Detected cart page from current DOM");
+      }
+      log("Pre-checkout address module initialized");
+    }
     (async () => {
       try {
         await waitForEcwid();
-        window.Ecwid.OnAPILoaded.add(() => {
-          ensureDocumentListeners();
-          window.Ecwid.OnPageLoaded.add(onPageLoaded);
-          log("Pre-checkout address module initialized");
-        });
+        initializeModule();
       } catch (error) {
         logError("Failed to initialize pre-checkout address module", error);
       }
     })();
   }
   const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
-  const BUNDLE_VERSION = "2026-03-21-precheckout-1";
+  const BUNDLE_VERSION = "2026-03-21-precheckout-3";
   function safeInit(name, init) {
     try {
       init();
