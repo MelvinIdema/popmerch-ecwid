@@ -1,9 +1,10 @@
 import { initUrlLocalization } from "./url-localization.js";
 import { initAddressValidation } from "./address-validation.js";
+import { initMobileFilterTileStacking } from "./mobile-filter-tile-stacking.js";
 
 // Replace with your Geoapify API key (https://myprojects.geoapify.com)
 const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
-const BUNDLE_VERSION = "2026-03-21-inline-checkout-2";
+const BUNDLE_VERSION = "2026-03-21-mobile-filter-zindex";
 const ENABLE_ADDRESS_VALIDATION = true;
 
 function safeInit(name, init) {
@@ -28,3 +29,7 @@ if (ENABLE_ADDRESS_VALIDATION) {
 } else {
   console.info("[Popmerch] Address validation disabled in this build");
 }
+
+safeInit("mobile filter tile stacking", () => {
+  initMobileFilterTileStacking();
+});
