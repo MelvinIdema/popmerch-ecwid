@@ -469,15 +469,21 @@ export function initAddressValidation(config = {}) {
         <div class="pm-addr-card__actions">
           ${
             suggestion
-              ? `<button type="button" class="pm-addr-card__button pm-addr-card__button--primary" data-pm-addr-action="use-suggested">${escapeHtml(
+              ? `<button type="button" class="pm-addr-card__button pm-addr-card__button--primary" style="${getInlineButtonStyle(
+                  "primary"
+                )}" data-pm-addr-action="use-suggested">${escapeHtml(
                   t("useSuggested")
                 )}</button>`
               : ""
           }
-          <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" data-pm-addr-action="use-original">${escapeHtml(
+          <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" style="${getInlineButtonStyle(
+            "ghost"
+          )}" data-pm-addr-action="use-original">${escapeHtml(
             t("useOriginal")
           )}</button>
-          <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" data-pm-addr-action="edit">${escapeHtml(
+          <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" style="${getInlineButtonStyle(
+            "ghost"
+          )}" data-pm-addr-action="edit">${escapeHtml(
             t("editAddress")
           )}</button>
         </div>
@@ -503,6 +509,43 @@ export function initAddressValidation(config = {}) {
       .replaceAll(">", "&gt;")
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#39;");
+  }
+
+  function getInlineButtonStyle(kind) {
+    const base = [
+      "appearance:none",
+      "display:inline-flex",
+      "align-items:center",
+      "justify-content:center",
+      "min-height:48px",
+      "padding:0 18px",
+      "border-radius:0",
+      "font:inherit",
+      "font-weight:600",
+      "line-height:normal",
+      "text-decoration:none",
+      "cursor:pointer",
+      "box-sizing:border-box",
+      "white-space:nowrap",
+      "transition:none",
+      "box-shadow:none",
+    ];
+
+    if (kind === "primary") {
+      return [
+        ...base,
+        "background-color:#191919",
+        "color:#ffffff",
+        "border:1px solid #191919",
+      ].join(";");
+    }
+
+    return [
+      ...base,
+      "background-color:#ffffff",
+      "color:#191919",
+      "border:1px solid #191919",
+    ].join(";");
   }
 
   function setFieldDisabled(disabled) {

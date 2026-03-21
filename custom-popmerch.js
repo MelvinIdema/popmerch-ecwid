@@ -544,13 +544,19 @@
         <p class="pm-addr-card__body">${escapeHtml(t("warningBody"))}</p>
         ${suggestionHtml}
         <div class="pm-addr-card__actions">
-          ${suggestion ? `<button type="button" class="pm-addr-card__button pm-addr-card__button--primary" data-pm-addr-action="use-suggested">${escapeHtml(
+          ${suggestion ? `<button type="button" class="pm-addr-card__button pm-addr-card__button--primary" style="${getInlineButtonStyle(
+        "primary"
+      )}" data-pm-addr-action="use-suggested">${escapeHtml(
         t("useSuggested")
       )}</button>` : ""}
-          <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" data-pm-addr-action="use-original">${escapeHtml(
+          <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" style="${getInlineButtonStyle(
+        "ghost"
+      )}" data-pm-addr-action="use-original">${escapeHtml(
         t("useOriginal")
       )}</button>
-          <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" data-pm-addr-action="edit">${escapeHtml(
+          <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" style="${getInlineButtonStyle(
+        "ghost"
+      )}" data-pm-addr-action="edit">${escapeHtml(
         t("editAddress")
       )}</button>
         </div>
@@ -569,6 +575,40 @@
     }
     function escapeHtml(value) {
       return String(value || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+    }
+    function getInlineButtonStyle(kind) {
+      const base = [
+        "appearance:none",
+        "display:inline-flex",
+        "align-items:center",
+        "justify-content:center",
+        "min-height:48px",
+        "padding:0 18px",
+        "border-radius:0",
+        "font:inherit",
+        "font-weight:600",
+        "line-height:normal",
+        "text-decoration:none",
+        "cursor:pointer",
+        "box-sizing:border-box",
+        "white-space:nowrap",
+        "transition:none",
+        "box-shadow:none"
+      ];
+      if (kind === "primary") {
+        return [
+          ...base,
+          "background-color:#191919",
+          "color:#ffffff",
+          "border:1px solid #191919"
+        ].join(";");
+      }
+      return [
+        ...base,
+        "background-color:#ffffff",
+        "color:#191919",
+        "border:1px solid #191919"
+      ].join(";");
     }
     function setFieldDisabled(disabled) {
       const fields = getFields();
@@ -985,10 +1025,10 @@
     const CACHE_KEY = "popmerch_fx_rates";
     const CACHE_TTL = 12 * 60 * 60 * 1e3;
     const PREF_KEY = "popmerch_currency";
-    const SWITCHER_ID = "pm-currency-switcher";
+    const INLINE_ID = "pm-currency-switcher";
     const STYLES_ID = "pm-currency-styles";
     const POLL_INTERVAL = 50;
-    const POLL_MAX_ATTEMPTS = 60;
+    const POLL_MAX_ATTEMPTS = 80;
     const CURRENCIES = {
       EUR: { name: "Euro", symbol: "€" },
       USD: { name: "US Dollar", symbol: "$" },
@@ -1042,20 +1082,7 @@
     function log(message, data = null) {
       if (!isDebug()) return;
       const style = "background:#7b1fa2;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
-      if (data != null) {
-        console.log(`%c[Currency]%c ${message}`, style, "", data);
-      } else {
-        console.log(`%c[Currency]%c ${message}`, style, "");
-      }
-    }
-    function logWarn(message, data = null) {
-      if (!isDebug()) return;
-      const style = "background:#f57c00;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
-      if (data != null) {
-        console.warn(`%c[Currency]%c ${message}`, style, "", data);
-      } else {
-        console.warn(`%c[Currency]%c ${message}`, style, "");
-      }
+      data != null ? console.log(`%c[Currency]%c ${message}`, style, "", data) : console.log(`%c[Currency]%c ${message}`, style, "");
     }
     function logError(message, error) {
       const style = "background:#c62828;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
@@ -1100,10 +1127,10 @@
     async function fetchRates() {
       const cached = getCachedRates();
       if (cached) {
-        log("Using cached exchange rates", cached);
+        log("Using cached rates", cached);
         return cached;
       }
-      log("Fetching exchange rates from Frankfurter");
+      log("Fetching rates from Frankfurter");
       try {
         const resp = await fetch(
           `https://api.frankfurter.dev/v1/latest?base=${BASE_CURRENCY}`
@@ -1112,10 +1139,10 @@
         const data = await resp.json();
         const rates = { ...data.rates, [BASE_CURRENCY]: 1 };
         setCachedRates(rates);
-        log("Fetched rates from Frankfurter", rates);
+        log("Rates fetched", rates);
         return rates;
       } catch (err) {
-        logWarn("Frankfurter unavailable, trying fallback API", err);
+        log("Frankfurter failed, trying fallback", err);
         try {
           const key = BASE_CURRENCY.toLowerCase();
           const resp = await fetch(
@@ -1123,36 +1150,19 @@
           );
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           const data = await resp.json();
-          const rawRates = data[key] || {};
           const rates = {};
-          for (const [code, rate] of Object.entries(rawRates)) {
+          for (const [code, rate] of Object.entries(data[key] || {})) {
             rates[code.toUpperCase()] = rate;
           }
           rates[BASE_CURRENCY] = 1;
           setCachedRates(rates);
-          log("Fetched rates from fallback API", rates);
+          log("Rates fetched from fallback", rates);
           return rates;
         } catch (err2) {
-          logError("Both exchange rate sources failed", err2);
+          logError("Both rate sources failed", err2);
           return null;
         }
       }
-    }
-    function parsePrice(text) {
-      const cleaned = text.replace(/[^0-9.,]/g, "").trim();
-      if (!cleaned) return null;
-      const lastComma = cleaned.lastIndexOf(",");
-      const lastDot = cleaned.lastIndexOf(".");
-      let normalized;
-      if (lastComma > lastDot) {
-        normalized = cleaned.replace(/\./g, "").replace(",", ".");
-      } else if (lastDot > lastComma) {
-        normalized = cleaned.replace(/,/g, "");
-      } else {
-        normalized = cleaned.replace(/[.,]/g, "");
-      }
-      const price = parseFloat(normalized);
-      return isNaN(price) ? null : price;
     }
     function convertPrice(basePrice, targetCurrency, rates) {
       if (targetCurrency === BASE_CURRENCY) return basePrice;
@@ -1171,49 +1181,15 @@
         }).format(amount);
       } catch {
         const decimals = ZERO_DECIMAL.has(currency) ? 0 : 2;
-        const symbol = ((_a2 = CURRENCIES[currency]) == null ? void 0 : _a2.symbol) || currency;
-        return `${symbol} ${amount.toFixed(decimals)}`;
+        return `${((_a2 = CURRENCIES[currency]) == null ? void 0 : _a2.symbol) || currency} ${amount.toFixed(decimals)}`;
       }
-    }
-    function findPriceElement() {
-      const selectors = [
-        ".product-details__price .product-price__value",
-        ".product-details__price .ec-price-item",
-        ".product-details .product-price__value",
-        ".product-details .ec-price-item",
-        ".product-price__value",
-        ".ec-price-item",
-        "[itemprop='price']"
-      ];
-      for (const selector of selectors) {
-        const el = document.querySelector(selector);
-        if (!el) continue;
-        const text = el.getAttribute("content") || el.textContent || "";
-        const price = parsePrice(text);
-        if (price !== null && price > 0) {
-          log(`Found price ${price} via selector "${selector}"`);
-          return { el, price };
-        }
-      }
-      return null;
-    }
-    function findPriceContainer() {
-      const selectors = [
-        ".product-details__price",
-        ".product-details .product-price",
-        ".details-product-price"
-      ];
-      for (const selector of selectors) {
-        const el = document.querySelector(selector);
-        if (el) return el;
-      }
-      return null;
     }
     function injectStyles() {
       if (document.getElementById(STYLES_ID)) return;
       const style = document.createElement("style");
       style.id = STYLES_ID;
       style.textContent = `
+      /* ── Inline product-page switcher ── */
       #pm-currency-switcher {
         display: inline-flex;
         align-items: center;
@@ -1223,7 +1199,7 @@
         flex-wrap: wrap;
       }
 
-      .pm-currency__label {
+      #pm-currency-switcher .pm-currency__label {
         font-size: 12px;
         font-weight: 600;
         letter-spacing: 0.04em;
@@ -1273,24 +1249,82 @@
         line-height: 1;
       }
 
-      .pm-currency__converted {
+      #pm-currency-switcher .pm-currency__converted {
         font-size: 13px;
         color: #666;
         font-style: italic;
         white-space: nowrap;
-        transition: opacity 0.15s;
       }
 
-      .pm-currency__converted:empty {
+      #pm-currency-switcher .pm-currency__converted:empty {
         display: none;
+      }
+
+      /* ── Announcement bar selector ── */
+      .announcement-bar__currency .pm-currency__bar-wrap {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+      }
+
+      .announcement-bar__currency .pm-currency__bar-select {
+        appearance: none;
+        -webkit-appearance: none;
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid rgba(255,255,255,0.6);
+        padding: 0 14px 0 0;
+        font-size: inherit;
+        font-family: inherit;
+        font-weight: inherit;
+        color: inherit;
+        cursor: pointer;
+        outline: none;
+        line-height: inherit;
+      }
+
+      .announcement-bar__currency .pm-currency__bar-select option {
+        color: #222;
+        background: #fff;
+      }
+
+      .announcement-bar__currency .pm-currency__bar-arrow {
+        position: absolute;
+        right: 0;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
+        font-size: 8px;
+        opacity: 0.8;
       }
     `;
       document.head.appendChild(style);
       log("Styles injected");
     }
-    function buildSwitcherElement(selectedCurrency) {
+    function buildSelectOptions(select, selectedCurrency) {
+      select.innerHTML = "";
+      for (const [code, info] of Object.entries(CURRENCIES)) {
+        const option = document.createElement("option");
+        option.value = code;
+        option.textContent = `${code} — ${info.name}`;
+        if (code === selectedCurrency) option.selected = true;
+        select.appendChild(option);
+      }
+    }
+    const syncListeners = /* @__PURE__ */ new Set();
+    function onCurrencyChange(currency, source) {
+      saveSelectedCurrency(currency);
+      for (const fn of syncListeners) {
+        if (fn !== source) fn(currency);
+      }
+    }
+    async function mountInlineSwitcher(basePrice, insertBeforeEl) {
+      if (document.getElementById(INLINE_ID)) return;
+      const selectedCurrency = getSelectedCurrency();
+      injectStyles();
       const wrapper = document.createElement("div");
-      wrapper.id = SWITCHER_ID;
+      wrapper.id = INLINE_ID;
       const label = document.createElement("span");
       label.className = "pm-currency__label";
       label.textContent = "Currency";
@@ -1299,13 +1333,7 @@
       const select = document.createElement("select");
       select.className = "pm-currency__select";
       select.setAttribute("aria-label", "Select display currency");
-      for (const [code, info] of Object.entries(CURRENCIES)) {
-        const option = document.createElement("option");
-        option.value = code;
-        option.textContent = `${code} — ${info.name}`;
-        if (code === selectedCurrency) option.selected = true;
-        select.appendChild(option);
-      }
+      buildSelectOptions(select, selectedCurrency);
       const arrow = document.createElement("span");
       arrow.className = "pm-currency__arrow";
       arrow.setAttribute("aria-hidden", "true");
@@ -1317,67 +1345,127 @@
       wrapper.appendChild(label);
       wrapper.appendChild(selectWrap);
       wrapper.appendChild(converted);
-      return { wrapper, select, converted };
-    }
-    async function mountSwitcher(basePrice, container) {
-      const selectedCurrency = getSelectedCurrency();
-      injectStyles();
-      const { wrapper, select, converted } = buildSwitcherElement(selectedCurrency);
-      container.parentNode.insertBefore(wrapper, container);
-      log("Switcher mounted", { basePrice, selectedCurrency });
+      insertBeforeEl.parentNode.insertBefore(wrapper, insertBeforeEl);
+      log("Inline switcher mounted", { basePrice, selectedCurrency });
       const rates = await fetchRates();
-      function updateConvertedPrice(currency) {
+      function updateDisplay(currency) {
         if (!rates || currency === BASE_CURRENCY) {
           converted.textContent = "";
           return;
         }
         const amount = convertPrice(basePrice, currency, rates);
         if (amount === null) {
-          logWarn(`No rate available for ${currency}`);
           converted.textContent = "";
           return;
         }
         converted.textContent = `≈ ${formatPrice(amount, currency)}`;
-        log(`Converted ${basePrice} ${BASE_CURRENCY} → ${formatPrice(amount, currency)}`);
       }
-      updateConvertedPrice(selectedCurrency);
+      const syncFn = (currency) => {
+        select.value = currency;
+        updateDisplay(currency);
+      };
+      syncListeners.add(syncFn);
+      updateDisplay(selectedCurrency);
       select.addEventListener("change", () => {
-        const currency = select.value;
-        saveSelectedCurrency(currency);
-        updateConvertedPrice(currency);
+        onCurrencyChange(select.value, syncFn);
+        updateDisplay(select.value);
       });
     }
+    function mountBarSwitcher() {
+      let attempts = 0;
+      const MAX = 60;
+      const poll = setInterval(() => {
+        attempts++;
+        const currencyEl = document.querySelector(".announcement-bar__currency");
+        if (currencyEl && !currencyEl.querySelector(".pm-currency__bar-wrap")) {
+          clearInterval(poll);
+          injectStyles();
+          const selectedCurrency = getSelectedCurrency();
+          currencyEl.textContent = "";
+          const wrap = document.createElement("span");
+          wrap.className = "pm-currency__bar-wrap";
+          const select = document.createElement("select");
+          select.className = "pm-currency__bar-select";
+          select.setAttribute("aria-label", "Select display currency");
+          buildSelectOptions(select, selectedCurrency);
+          const arrow = document.createElement("span");
+          arrow.className = "pm-currency__bar-arrow";
+          arrow.setAttribute("aria-hidden", "true");
+          arrow.textContent = "▼";
+          wrap.appendChild(select);
+          wrap.appendChild(arrow);
+          currencyEl.appendChild(wrap);
+          log("Bar switcher mounted", selectedCurrency);
+          const syncFn = (currency) => {
+            select.value = currency;
+          };
+          syncListeners.add(syncFn);
+          select.addEventListener("change", () => {
+            onCurrencyChange(select.value, syncFn);
+            const inlineSelect = document.querySelector(
+              "#pm-currency-switcher .pm-currency__select"
+            );
+            if (inlineSelect && inlineSelect.value !== select.value) {
+              inlineSelect.value = select.value;
+              inlineSelect.dispatchEvent(new Event("change"));
+            }
+          });
+          return;
+        }
+        if (attempts >= MAX) {
+          clearInterval(poll);
+          log("Announcement bar not found after polling");
+        }
+      }, POLL_INTERVAL);
+    }
     function handleProductPage() {
-      const existing = document.getElementById(SWITCHER_ID);
+      const existing = document.getElementById(INLINE_ID);
       if (existing) existing.remove();
+      syncListeners.clear();
+      const barSelect = document.querySelector(".pm-currency__bar-select");
+      if (barSelect) {
+        const syncFn = (currency) => {
+          barSelect.value = currency;
+        };
+        syncListeners.add(syncFn);
+      }
       let attempts = 0;
       const poll = setInterval(() => {
         attempts++;
-        const found = findPriceElement();
-        const container = findPriceContainer();
-        if (found && container) {
+        const priceEl = document.querySelector(
+          '.product-details__product-price[itemprop="price"][content]'
+        );
+        const priceRow = document.querySelector(".product-details__product-price-row");
+        if (priceEl && priceRow) {
           clearInterval(poll);
-          mountSwitcher(found.price, container).catch((err) => {
-            logError("Failed to mount currency switcher", err);
+          const basePrice = parseFloat(priceEl.getAttribute("content"));
+          if (isNaN(basePrice) || basePrice <= 0) {
+            log("Invalid price content attribute", priceEl.getAttribute("content"));
+            return;
+          }
+          log("Price found", { basePrice, priceRow });
+          mountInlineSwitcher(basePrice, priceRow).catch((err) => {
+            logError("Failed to mount inline switcher", err);
           });
           return;
         }
         if (attempts >= POLL_MAX_ATTEMPTS) {
           clearInterval(poll);
-          logWarn("Price element not found — currency switcher not injected");
+          log("Price element not found after polling");
         }
       }, POLL_INTERVAL);
     }
+    mountBarSwitcher();
     (_b = (_a = window.Ecwid) == null ? void 0 : _a.OnPageLoaded) == null ? void 0 : _b.add(function(page) {
+      log("Page loaded", page.type);
       if (page.type === "PRODUCT") {
-        log("Product page loaded", page);
         handleProductPage();
       }
     });
     log("Currency switcher initialised");
   }
   const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
-  const BUNDLE_VERSION = "2026-03-21-currency-switcher";
+  const BUNDLE_VERSION = "2026-03-21-inline-checkout-4";
   function safeInit(name, init) {
     try {
       init();
