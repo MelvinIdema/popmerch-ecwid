@@ -3,7 +3,7 @@ import { initAddressValidation } from "./address-validation.js";
 
 // Replace with your Geoapify API key (https://myprojects.geoapify.com)
 const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
-const BUNDLE_VERSION = "2026-03-20-address-full-2";
+const BUNDLE_VERSION = "2026-03-21-precheckout-1";
 const ENABLE_ADDRESS_VALIDATION = true;
 
 function safeInit(name, init) {

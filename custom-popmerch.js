@@ -138,41 +138,47 @@
     log("URL Localization Module initialized ✓");
   }
   function initAddressValidation(config = {}) {
-    const FIELD_SELECTORS = {
-      street: [
-        'input[autocomplete="address-line1"]',
-        'input[name="street"]',
-        'input[name*="street" i]',
-        'input[id*="street" i]',
-        'input[name*="address" i]',
-        'input[id*="address" i]'
-      ],
-      city: [
-        'input[autocomplete="address-level2"]',
-        'input[name="city"]',
-        'input[name*="city" i]',
-        'input[id*="city" i]',
-        'input[name*="town" i]',
-        'input[id*="town" i]'
-      ],
-      postalCode: [
-        'input[autocomplete="postal-code"]',
-        'input[name="postalCode"]',
-        'input[name*="postal" i]',
-        'input[id*="postal" i]',
-        'input[name*="zip" i]',
-        'input[id*="zip" i]'
-      ],
-      country: [
-        'select[autocomplete="country"]',
-        'select[name="countryName"]',
-        'select[name*="country" i]',
-        'select[id*="country" i]',
-        'input[autocomplete="country-name"]',
-        'input[name="countryName"]',
-        'input[name*="country" i]',
-        'input[id*="country" i]'
-      ]
+    const CHECKOUT_TRIGGER_SELECTORS = [
+      ".ec-cart__button--checkout .form-control__button",
+      ".ec-cart__button--checkout button",
+      ".ec-cart__button--checkout a",
+      ".ec-cart__button--checkout",
+      ".ec-minicart__button--checkout",
+      '[data-ecwid-action="goto-checkout"]'
+    ];
+    const SESSION = {
+      DRAFT_KEY: "pm_precheckout_draft_v1",
+      getDraft() {
+        try {
+          return JSON.parse(sessionStorage.getItem(this.DRAFT_KEY));
+        } catch {
+          return null;
+        }
+      },
+      setDraft(value) {
+        try {
+          sessionStorage.setItem(this.DRAFT_KEY, JSON.stringify(value));
+        } catch {
+        }
+      }
+    };
+    const CONFIG = {
+      apiKey: config.apiKey || "",
+      pollInterval: 50,
+      pollTimeout: 1e4,
+      confidenceWarning: 0.4,
+      confidenceClean: 0.75
+    };
+    const state = {
+      onCartPage: false,
+      documentListenersAttached: false,
+      modalOpen: false,
+      mode: "form",
+      error: "",
+      loadingMessage: "",
+      formData: null,
+      normalizedAddress: null,
+      suggestedAddress: null
     };
     function isDebug() {
       try {
@@ -189,631 +195,971 @@
         return true;
       }
     }
-    function isModuleDisabled() {
-      try {
-        return localStorage.getItem("ADDR_DISABLED") === "true";
-      } catch {
-        return false;
-      }
-    }
-    function log(msg, data = null) {
+    function log(message, data = null) {
       if (!isDebug()) return;
       const style = "background:#2e7d32;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
-      data ? console.log(`%c[AddrVal]%c ${msg}`, style, "", data) : console.log(`%c[AddrVal]%c ${msg}`, style, "");
+      if (data != null) {
+        console.log(`%c[AddrVal]%c ${message}`, style, "", data);
+        return;
+      }
+      console.log(`%c[AddrVal]%c ${message}`, style, "");
     }
-    function logWarn(msg, data = null) {
+    function logWarn(message, data = null) {
       if (!isDebug()) return;
       const style = "background:#f57c00;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
-      data ? console.warn(`%c[AddrVal]%c ${msg}`, style, "", data) : console.warn(`%c[AddrVal]%c ${msg}`, style, "");
+      if (data != null) {
+        console.warn(`%c[AddrVal]%c ${message}`, style, "", data);
+        return;
+      }
+      console.warn(`%c[AddrVal]%c ${message}`, style, "");
     }
-    function logError(msg, err) {
+    function logError(message, error) {
       const style = "background:#c62828;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
-      console.error(`%c[AddrVal]%c ${msg}`, style, "", err);
+      console.error(`%c[AddrVal]%c ${message}`, style, "", error);
     }
-    const CONFIG = {
-      apiKey: config.apiKey || "",
-      // Confidence threshold below which we show a warning (address not found / unreliable)
-      confidenceWarning: 0.4,
-      // Confidence threshold above which the address is considered clean
-      confidenceClean: 0.75,
-      pollInterval: 50,
-      pollTimeout: 1e4
-    };
-    log("=== Address Validation V1 ===");
-    log("Config:", {
-      apiKey: CONFIG.apiKey ? "***set***" : "(not set)",
-      ADDR_DISABLED: isModuleDisabled(),
-      ADDR_DEBUG: isDebug(),
-      ADDR_STEP_NORMALIZE: isStepEnabled("NORMALIZE"),
-      ADDR_STEP_GEOAPIFY: isStepEnabled("GEOAPIFY"),
-      ADDR_STEP_UI: isStepEnabled("UI")
-    });
-    if (isModuleDisabled()) {
-      logWarn("Address validation module disabled via localStorage");
-      return;
+    function getStorefrontLang() {
+      var _a, _b;
+      const lang = ((_b = (_a = window.Ecwid) == null ? void 0 : _a.getStorefrontLang) == null ? void 0 : _b.call(_a)) || document.documentElement.lang || "nl";
+      return String(lang).slice(0, 2).toLowerCase();
     }
-    const SESSION = {
-      DISABLED_KEY: "pm_addr_disabled",
-      LAST_KEY: "pm_addr_last",
-      SKIP_KEY: "pm_addr_skip_next",
-      isDisabled() {
-        try {
-          return sessionStorage.getItem(this.DISABLED_KEY) === "1";
-        } catch {
-          return false;
-        }
+    const STRINGS = {
+      nl: {
+        title: "Controleer je bezorgadres",
+        description: "Voer alvast je e-mailadres en bezorgadres in. We controleren het adres voordat we je naar de checkout sturen.",
+        email: "E-mailadres",
+        name: "Voor- en achternaam",
+        phone: "Telefoon (optioneel)",
+        companyName: "Bedrijfsnaam (optioneel)",
+        street: "Adres",
+        postalCode: "Postcode",
+        city: "Stad",
+        countryName: "Land",
+        cancel: "Annuleren",
+        continue: "Controleer en ga door",
+        loadingValidate: "Adres wordt gecontroleerd...",
+        loadingSave: "Gegevens worden opgeslagen...",
+        correctionTitle: "We vonden een betere adresnotatie",
+        correctionBody: "Dit adres lijkt beter aan te sluiten op een bekende locatie. Wil je deze versie gebruiken?",
+        warningTitle: "We konden dit adres niet goed verifieren",
+        warningBody: "Controleer het adres nog een keer. Als het toch klopt, kun je gewoon doorgaan.",
+        useCorrected: "Gebruik gecorrigeerd adres",
+        useOriginal: "Mijn adres klopt",
+        edit: "Adres aanpassen",
+        genericError: "Er ging iets mis. Probeer het opnieuw.",
+        saveError: "Het adres kon niet in Ecwid worden opgeslagen. Probeer het opnieuw.",
+        requiredField: "Vul alle verplichte velden in.",
+        invalidEmail: "Vul een geldig e-mailadres in.",
+        closeLabel: "Sluiten",
+        note: "Je kunt deze gegevens in Ecwid later nog aanpassen."
       },
-      disable() {
-        try {
-          sessionStorage.setItem(this.DISABLED_KEY, "1");
-        } catch {
-        }
+      en: {
+        title: "Check your delivery address",
+        description: "Enter your email and delivery address first. We will validate the address before sending you to checkout.",
+        email: "Email",
+        name: "Full name",
+        phone: "Phone (optional)",
+        companyName: "Company name (optional)",
+        street: "Address",
+        postalCode: "Postal code",
+        city: "City",
+        countryName: "Country",
+        cancel: "Cancel",
+        continue: "Validate and continue",
+        loadingValidate: "Validating address...",
+        loadingSave: "Saving details...",
+        correctionTitle: "We found a better address format",
+        correctionBody: "This version looks closer to a known address. Do you want to use it?",
+        warningTitle: "We could not confidently verify this address",
+        warningBody: "Please check the address once more. If it is still correct, you can continue anyway.",
+        useCorrected: "Use corrected address",
+        useOriginal: "My address is correct",
+        edit: "Edit address",
+        genericError: "Something went wrong. Please try again.",
+        saveError: "We could not save the address in Ecwid. Please try again.",
+        requiredField: "Please fill in all required fields.",
+        invalidEmail: "Please enter a valid email address.",
+        closeLabel: "Close",
+        note: "You can still adjust these details later in Ecwid."
       },
-      getLastValidated() {
-        try {
-          return JSON.parse(sessionStorage.getItem(this.LAST_KEY));
-        } catch {
-          return null;
-        }
-      },
-      setLastValidated(addr) {
-        try {
-          sessionStorage.setItem(this.LAST_KEY, JSON.stringify(addr));
-        } catch {
-        }
-      },
-      shouldSkipNext() {
-        try {
-          return sessionStorage.getItem(this.SKIP_KEY) === "1";
-        } catch {
-          return false;
-        }
-      },
-      setSkipNext() {
-        try {
-          sessionStorage.setItem(this.SKIP_KEY, "1");
-        } catch {
-        }
-      },
-      clearSkipNext() {
-        try {
-          sessionStorage.removeItem(this.SKIP_KEY);
-        } catch {
-        }
+      de: {
+        title: "Lieferadresse pruefen",
+        description: "Gib zuerst deine E-Mail-Adresse und Lieferadresse ein. Wir pruefen die Adresse, bevor wir dich zur Kasse schicken.",
+        email: "E-Mail-Adresse",
+        name: "Vor- und Nachname",
+        phone: "Telefon (optional)",
+        companyName: "Firmenname (optional)",
+        street: "Adresse",
+        postalCode: "Postleitzahl",
+        city: "Stadt",
+        countryName: "Land",
+        cancel: "Abbrechen",
+        continue: "Pruefen und weiter",
+        loadingValidate: "Adresse wird geprueft...",
+        loadingSave: "Daten werden gespeichert...",
+        correctionTitle: "Wir haben eine bessere Adressnotation gefunden",
+        correctionBody: "Diese Version passt besser zu einer bekannten Adresse. Moechtest du sie verwenden?",
+        warningTitle: "Wir konnten diese Adresse nicht sicher pruefen",
+        warningBody: "Bitte pruefe die Adresse noch einmal. Wenn sie trotzdem korrekt ist, kannst du fortfahren.",
+        useCorrected: "Korrigierte Adresse verwenden",
+        useOriginal: "Meine Adresse stimmt",
+        edit: "Adresse bearbeiten",
+        genericError: "Etwas ist schiefgelaufen. Bitte versuche es erneut.",
+        saveError: "Die Adresse konnte nicht in Ecwid gespeichert werden. Bitte versuche es erneut.",
+        requiredField: "Bitte fuelle alle Pflichtfelder aus.",
+        invalidEmail: "Bitte gib eine gueltige E-Mail-Adresse ein.",
+        closeLabel: "Schliessen",
+        note: "Du kannst diese Daten spaeter in Ecwid noch anpassen."
       }
     };
-    let state = "IDLE";
-    let onCheckoutAddressPage = false;
-    let documentListenersAttached = false;
-    let pendingSuggestion = null;
+    function t(key) {
+      var _a;
+      const lang = getStorefrontLang();
+      return ((_a = STRINGS[lang]) == null ? void 0 : _a[key]) || STRINGS.nl[key] || key;
+    }
+    function wait(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
     async function waitForEcwid() {
       var _a, _b, _c, _d;
-      const start = Date.now();
-      while (Date.now() - start < CONFIG.pollTimeout) {
-        if (((_b = (_a = window.Ecwid) == null ? void 0 : _a.OnAPILoaded) == null ? void 0 : _b.add) && ((_d = (_c = window.Ecwid) == null ? void 0 : _c.OnPageLoaded) == null ? void 0 : _d.add)) return;
-        await new Promise((r) => setTimeout(r, CONFIG.pollInterval));
-      }
-      logError("Ecwid not available within timeout", new Error("timeout"));
-    }
-    function normalizeStreet(street) {
-      if (!street) return street;
-      let s = street;
-      s = s.replace(/([a-zA-Z])(\d)/g, "$1 $2");
-      s = s.replace(/(\d+)\s+([A-Za-z])\s*$/, "$1$2");
-      s = s.trim().replace(/\s+/g, " ");
-      return s;
-    }
-    function normalizeAddress(addr) {
-      return { ...addr, street: normalizeStreet(addr.street) };
-    }
-    function isAddressComplete(addr) {
-      return !!((addr == null ? void 0 : addr.street) && (addr == null ? void 0 : addr.city));
-    }
-    function addressKey(addr) {
-      const n = (v) => (v || "").toLowerCase().trim().replace(/\s+/g, " ");
-      return `${n(addr.street)}|${n(addr.city)}|${n(addr.postalCode)}|${n(addr.countryName)}`;
-    }
-    function isSameAddress(a, b) {
-      if (!a || !b) return false;
-      return addressKey(a) === addressKey(b);
-    }
-    function escapeHtml(str) {
-      return (str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-    }
-    function getAddressDomFields() {
-      const get = (selectors) => {
-        for (const sel of selectors) {
-          const el = document.querySelector(sel);
-          if (el) return el;
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < CONFIG.pollTimeout) {
+        if (((_b = (_a = window.Ecwid) == null ? void 0 : _a.OnAPILoaded) == null ? void 0 : _b.add) && ((_d = (_c = window.Ecwid) == null ? void 0 : _c.OnPageLoaded) == null ? void 0 : _d.add)) {
+          return;
         }
-        return null;
-      };
+        await wait(CONFIG.pollInterval);
+      }
+      throw new Error("Ecwid JS API did not initialize within the timeout.");
+    }
+    function normalizeWhitespace(value) {
+      return String(value || "").trim().replace(/\s+/g, " ");
+    }
+    function normalizeStreet(value) {
+      let street = normalizeWhitespace(value);
+      street = street.replace(/([A-Za-z])(\d)/g, "$1 $2");
+      street = street.replace(/(\d+)\s+([A-Za-z])\s*$/, "$1$2");
+      return street;
+    }
+    function normalizePostalCode(value) {
+      return normalizeWhitespace(value).toUpperCase();
+    }
+    function normalizeFormData(data) {
       return {
-        streetInput: get(FIELD_SELECTORS.street),
-        cityInput: get(FIELD_SELECTORS.city),
-        zipInput: get(FIELD_SELECTORS.postalCode),
-        countryEl: get(FIELD_SELECTORS.country)
+        email: normalizeWhitespace(data.email).toLowerCase(),
+        name: normalizeWhitespace(data.name),
+        phone: normalizeWhitespace(data.phone),
+        companyName: normalizeWhitespace(data.companyName),
+        street: isStepEnabled("NORMALIZE") ? normalizeStreet(data.street) : normalizeWhitespace(data.street),
+        postalCode: normalizePostalCode(data.postalCode),
+        city: normalizeWhitespace(data.city),
+        countryName: normalizeWhitespace(data.countryName)
       };
     }
-    function readAddressFromDom() {
-      var _a, _b, _c, _d, _e, _f, _g, _h;
-      const { streetInput, cityInput, zipInput, countryEl } = getAddressDomFields();
-      if (!streetInput && !cityInput) return null;
-      const countryName = countryEl instanceof HTMLSelectElement ? ((_c = (_b = (_a = countryEl.selectedOptions) == null ? void 0 : _a[0]) == null ? void 0 : _b.text) == null ? void 0 : _c.trim()) || ((_d = countryEl.value) == null ? void 0 : _d.trim()) || "" : ((_e = countryEl == null ? void 0 : countryEl.value) == null ? void 0 : _e.trim()) || "";
+    function isValidEmail(email) {
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    }
+    function getEmptyFormData() {
       return {
-        street: ((_f = streetInput == null ? void 0 : streetInput.value) == null ? void 0 : _f.trim()) || "",
-        city: ((_g = cityInput == null ? void 0 : cityInput.value) == null ? void 0 : _g.trim()) || "",
-        postalCode: ((_h = zipInput == null ? void 0 : zipInput.value) == null ? void 0 : _h.trim()) || "",
-        countryName
+        email: "",
+        name: "",
+        phone: "",
+        companyName: "",
+        street: "",
+        postalCode: "",
+        city: "",
+        countryName: getDefaultCountryName()
       };
     }
-    function describeField(el) {
-      if (!el) return null;
-      return {
-        tag: el.tagName,
-        name: el.getAttribute("name"),
-        id: el.getAttribute("id"),
-        autocomplete: el.getAttribute("autocomplete"),
-        type: el.getAttribute("type"),
-        value: el.value
-      };
+    function getDefaultCountryName() {
+      var _a, _b, _c;
+      try {
+        const countryCode = (_c = (_b = (_a = window.Ecwid) == null ? void 0 : _a.getVisitorLocation) == null ? void 0 : _b.call(_a)) == null ? void 0 : _c.countryCode;
+        if (!countryCode) return "";
+        const displayNames = new Intl.DisplayNames([getStorefrontLang(), "en"], {
+          type: "region"
+        });
+        return displayNames.of(countryCode.toUpperCase()) || "";
+      } catch {
+        return "";
+      }
     }
-    function logDetectedFields(reason) {
-      if (!isDebug()) return;
-      const fields = getAddressDomFields();
-      log(`Detected address fields (${reason})`, {
-        street: describeField(fields.streetInput),
-        city: describeField(fields.cityInput),
-        postalCode: describeField(fields.zipInput),
-        country: describeField(fields.countryEl)
+    function escapeHtml(value) {
+      return String(value || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+    }
+    function diffRows(currentAddress, suggestedAddress) {
+      const fields = [
+        { key: "street", label: t("street") },
+        { key: "postalCode", label: t("postalCode") },
+        { key: "city", label: t("city") },
+        { key: "countryName", label: t("countryName") }
+      ];
+      return fields.filter((field) => {
+        const currentValue = normalizeWhitespace(currentAddress[field.key]).toLowerCase();
+        const suggestedValue = normalizeWhitespace(
+          suggestedAddress[field.key]
+        ).toLowerCase();
+        return suggestedValue && currentValue !== suggestedValue;
+      }).map((field) => {
+        return `
+          <div class="pm-addr-diff-row">
+            <div class="pm-addr-diff-label">${escapeHtml(field.label)}</div>
+            <div class="pm-addr-diff-value">${escapeHtml(
+          suggestedAddress[field.key]
+        )}</div>
+          </div>
+        `;
+      }).join("");
+    }
+    function getModalRoot() {
+      return document.getElementById("pm-precheckout-modal");
+    }
+    function injectStyles() {
+      if (document.getElementById("pm-precheckout-styles")) return;
+      const style = document.createElement("style");
+      style.id = "pm-precheckout-styles";
+      style.textContent = `
+      body.pm-precheckout-open {
+        overflow: hidden;
+      }
+
+      #pm-precheckout-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 1000000;
+        display: none;
+      }
+
+      #pm-precheckout-modal.pm-visible {
+        display: block;
+      }
+
+      #pm-precheckout-modal .pm-addr-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(17, 17, 17, 0.6);
+      }
+
+      #pm-precheckout-modal .pm-addr-dialog {
+        position: relative;
+        z-index: 1;
+        width: min(680px, calc(100vw - 32px));
+        margin: 32px auto;
+        background: #ffffff;
+        border-radius: 18px;
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.2);
+        overflow: hidden;
+        font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      #pm-precheckout-modal .pm-addr-header {
+        padding: 24px 24px 8px;
+        border-bottom: 1px solid #ececec;
+      }
+
+      #pm-precheckout-modal .pm-addr-title {
+        margin: 0;
+        font-size: 24px;
+        line-height: 1.2;
+        color: #111111;
+      }
+
+      #pm-precheckout-modal .pm-addr-description {
+        margin: 10px 0 0;
+        font-size: 14px;
+        line-height: 1.5;
+        color: #5f5f5f;
+      }
+
+      #pm-precheckout-modal .pm-addr-close {
+        position: absolute;
+        top: 18px;
+        right: 18px;
+        width: 36px;
+        height: 36px;
+        border: none;
+        border-radius: 999px;
+        background: #f2f2f2;
+        color: #111111;
+        cursor: pointer;
+        font-size: 18px;
+      }
+
+      #pm-precheckout-modal .pm-addr-body {
+        padding: 24px;
+      }
+
+      #pm-precheckout-modal .pm-addr-note,
+      #pm-precheckout-modal .pm-addr-error {
+        margin: 0 0 18px;
+        padding: 12px 14px;
+        border-radius: 12px;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      #pm-precheckout-modal .pm-addr-note {
+        background: #f5f5f5;
+        color: #4a4a4a;
+      }
+
+      #pm-precheckout-modal .pm-addr-error {
+        background: #fff1f0;
+        color: #9b2c2c;
+        border: 1px solid #ffd6d2;
+      }
+
+      #pm-precheckout-modal .pm-addr-form {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      #pm-precheckout-modal .pm-addr-field {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+      }
+
+      #pm-precheckout-modal .pm-addr-field--full {
+        grid-column: 1 / -1;
+      }
+
+      #pm-precheckout-modal .pm-addr-label {
+        font-size: 13px;
+        font-weight: 600;
+        color: #1f1f1f;
+      }
+
+      #pm-precheckout-modal .pm-addr-input {
+        width: 100%;
+        min-height: 48px;
+        box-sizing: border-box;
+        border: 1px solid #d9d9d9;
+        border-radius: 12px;
+        padding: 0 14px;
+        font-size: 15px;
+        color: #111111;
+        background: #ffffff;
+      }
+
+      #pm-precheckout-modal .pm-addr-input:focus {
+        outline: none;
+        border-color: #111111;
+        box-shadow: 0 0 0 3px rgba(17, 17, 17, 0.08);
+      }
+
+      #pm-precheckout-modal .pm-addr-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 22px;
+        flex-wrap: wrap;
+      }
+
+      #pm-precheckout-modal .pm-addr-button {
+        min-height: 46px;
+        padding: 0 18px;
+        border: none;
+        border-radius: 999px;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      #pm-precheckout-modal .pm-addr-button--ghost {
+        background: #f2f2f2;
+        color: #232323;
+      }
+
+      #pm-precheckout-modal .pm-addr-button--primary {
+        background: #111111;
+        color: #ffffff;
+      }
+
+      #pm-precheckout-modal .pm-addr-loading {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 220px;
+        text-align: center;
+        color: #444444;
+        font-size: 15px;
+      }
+
+      #pm-precheckout-modal .pm-addr-card-title {
+        margin: 0 0 8px;
+        font-size: 20px;
+        color: #111111;
+      }
+
+      #pm-precheckout-modal .pm-addr-card-body {
+        margin: 0 0 18px;
+        color: #5d5d5d;
+        line-height: 1.5;
+        font-size: 14px;
+      }
+
+      #pm-precheckout-modal .pm-addr-diff {
+        background: #f5f5f5;
+        border-radius: 14px;
+        padding: 14px;
+      }
+
+      #pm-precheckout-modal .pm-addr-diff-row {
+        display: grid;
+        grid-template-columns: 120px 1fr;
+        gap: 12px;
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      #pm-precheckout-modal .pm-addr-diff-row + .pm-addr-diff-row {
+        margin-top: 8px;
+      }
+
+      #pm-precheckout-modal .pm-addr-diff-label {
+        color: #666666;
+      }
+
+      #pm-precheckout-modal .pm-addr-diff-value {
+        font-weight: 600;
+        color: #111111;
+      }
+
+      @media (max-width: 640px) {
+        #pm-precheckout-modal .pm-addr-dialog {
+          width: calc(100vw - 20px);
+          margin: 10px auto;
+        }
+
+        #pm-precheckout-modal .pm-addr-header,
+        #pm-precheckout-modal .pm-addr-body {
+          padding: 20px;
+        }
+
+        #pm-precheckout-modal .pm-addr-form {
+          grid-template-columns: 1fr;
+        }
+
+        #pm-precheckout-modal .pm-addr-diff-row {
+          grid-template-columns: 1fr;
+          gap: 2px;
+        }
+      }
+    `;
+      document.head.appendChild(style);
+    }
+    function ensureModal() {
+      injectStyles();
+      if (getModalRoot()) return getModalRoot();
+      const root = document.createElement("div");
+      root.id = "pm-precheckout-modal";
+      root.innerHTML = `
+      <div class="pm-addr-overlay" data-action="close"></div>
+      <div class="pm-addr-dialog" role="dialog" aria-modal="true" aria-labelledby="pm-addr-title"></div>
+    `;
+      root.addEventListener("click", onModalClick);
+      root.addEventListener("submit", onModalSubmit);
+      document.body.appendChild(root);
+      return root;
+    }
+    function renderModal() {
+      const root = ensureModal();
+      const dialog = root.querySelector(".pm-addr-dialog");
+      if (!dialog) return;
+      if (state.mode === "loading") {
+        dialog.innerHTML = `
+        <div class="pm-addr-header">
+          <h2 class="pm-addr-title" id="pm-addr-title">${escapeHtml(
+          t("title")
+        )}</h2>
+        </div>
+        <div class="pm-addr-body">
+          <div class="pm-addr-loading">${escapeHtml(state.loadingMessage)}</div>
+        </div>
+      `;
+        return;
+      }
+      if (state.mode === "correction") {
+        dialog.innerHTML = `
+        <button type="button" class="pm-addr-close" data-action="close" aria-label="${escapeHtml(
+          t("closeLabel")
+        )}">x</button>
+        <div class="pm-addr-header">
+          <h2 class="pm-addr-title" id="pm-addr-title">${escapeHtml(
+          t("correctionTitle")
+        )}</h2>
+          <p class="pm-addr-description">${escapeHtml(
+          t("correctionBody")
+        )}</p>
+        </div>
+        <div class="pm-addr-body">
+          <div class="pm-addr-diff">
+            ${diffRows(state.normalizedAddress, state.suggestedAddress)}
+          </div>
+          <div class="pm-addr-actions">
+            <button type="button" class="pm-addr-button pm-addr-button--ghost" data-action="edit-address">${escapeHtml(
+          t("edit")
+        )}</button>
+            <button type="button" class="pm-addr-button pm-addr-button--ghost" data-action="use-original">${escapeHtml(
+          t("useOriginal")
+        )}</button>
+            <button type="button" class="pm-addr-button pm-addr-button--primary" data-action="use-corrected">${escapeHtml(
+          t("useCorrected")
+        )}</button>
+          </div>
+        </div>
+      `;
+        return;
+      }
+      if (state.mode === "warning") {
+        dialog.innerHTML = `
+        <button type="button" class="pm-addr-close" data-action="close" aria-label="${escapeHtml(
+          t("closeLabel")
+        )}">x</button>
+        <div class="pm-addr-header">
+          <h2 class="pm-addr-title" id="pm-addr-title">${escapeHtml(
+          t("warningTitle")
+        )}</h2>
+          <p class="pm-addr-description">${escapeHtml(
+          t("warningBody")
+        )}</p>
+        </div>
+        <div class="pm-addr-body">
+          <div class="pm-addr-actions">
+            <button type="button" class="pm-addr-button pm-addr-button--ghost" data-action="edit-address">${escapeHtml(
+          t("edit")
+        )}</button>
+            <button type="button" class="pm-addr-button pm-addr-button--primary" data-action="use-original">${escapeHtml(
+          t("useOriginal")
+        )}</button>
+          </div>
+        </div>
+      `;
+        return;
+      }
+      const formData = state.formData || getEmptyFormData();
+      dialog.innerHTML = `
+      <button type="button" class="pm-addr-close" data-action="close" aria-label="${escapeHtml(
+        t("closeLabel")
+      )}">x</button>
+      <div class="pm-addr-header">
+        <h2 class="pm-addr-title" id="pm-addr-title">${escapeHtml(
+        t("title")
+      )}</h2>
+        <p class="pm-addr-description">${escapeHtml(t("description"))}</p>
+      </div>
+      <div class="pm-addr-body">
+        <p class="pm-addr-note">${escapeHtml(t("note"))}</p>
+        ${state.error ? `<p class="pm-addr-error">${escapeHtml(state.error)}</p>` : ""}
+        <form class="pm-addr-form" novalidate>
+          ${renderField("email", t("email"), formData.email, true, "email")}
+          ${renderField("name", t("name"), formData.name, true)}
+          ${renderField("phone", t("phone"), formData.phone, false, "tel")}
+          ${renderField(
+        "companyName",
+        t("companyName"),
+        formData.companyName,
+        false
+      )}
+          ${renderField("street", t("street"), formData.street, true, "text", true)}
+          ${renderField(
+        "postalCode",
+        t("postalCode"),
+        formData.postalCode,
+        true
+      )}
+          ${renderField("city", t("city"), formData.city, true)}
+          ${renderField(
+        "countryName",
+        t("countryName"),
+        formData.countryName,
+        true
+      )}
+          <div class="pm-addr-field pm-addr-field--full">
+            <div class="pm-addr-actions">
+              <button type="button" class="pm-addr-button pm-addr-button--ghost" data-action="close">${escapeHtml(
+        t("cancel")
+      )}</button>
+              <button type="submit" class="pm-addr-button pm-addr-button--primary">${escapeHtml(
+        t("continue")
+      )}</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    `;
+      queueMicrotask(() => {
+        var _a;
+        const firstEmptyField = dialog.querySelector(
+          '.pm-addr-input[value=""], .pm-addr-input:not([value])'
+        );
+        const fallbackField = dialog.querySelector(".pm-addr-input");
+        (_a = firstEmptyField || fallbackField) == null ? void 0 : _a.focus();
       });
     }
-    async function validateWithGeoapify(addr) {
-      if (!CONFIG.apiKey) {
-        logWarn("No Geoapify API key configured — skipping API validation");
-        return null;
+    function renderField(name, label, value, required, type = "text", full = false) {
+      return `
+      <label class="pm-addr-field ${full ? "pm-addr-field--full" : ""}">
+        <span class="pm-addr-label">${escapeHtml(label)}</span>
+        <input
+          class="pm-addr-input"
+          name="${escapeHtml(name)}"
+          type="${escapeHtml(type)}"
+          value="${escapeHtml(value || "")}"
+          ${required ? "required" : ""}
+          autocomplete="${escapeHtml(getAutocomplete(name))}"
+        />
+      </label>
+    `;
+    }
+    function getAutocomplete(fieldName) {
+      const map = {
+        email: "email",
+        name: "shipping name",
+        phone: "shipping tel",
+        companyName: "shipping organization",
+        street: "shipping street-address",
+        postalCode: "shipping postal-code",
+        city: "shipping address-level2",
+        countryName: "shipping country"
+      };
+      return map[fieldName] || "off";
+    }
+    function openModal() {
+      state.modalOpen = true;
+      state.mode = "loading";
+      state.error = "";
+      state.loadingMessage = t("loadingValidate");
+      document.body.classList.add("pm-precheckout-open");
+      ensureModal().classList.add("pm-visible");
+      renderModal();
+      loadPrefill().then((prefill) => {
+        state.formData = prefill;
+        state.mode = "form";
+        state.error = "";
+        renderModal();
+        log("Pre-checkout modal opened", prefill);
+      }).catch((error) => {
+        logError("Failed to load modal prefill", error);
+        state.formData = getEmptyFormData();
+        state.mode = "form";
+        state.error = "";
+        renderModal();
+      });
+    }
+    function closeModal() {
+      const root = getModalRoot();
+      if (!root) return;
+      root.classList.remove("pm-visible");
+      document.body.classList.remove("pm-precheckout-open");
+      state.modalOpen = false;
+      state.mode = "form";
+      state.error = "";
+      state.loadingMessage = "";
+    }
+    async function loadPrefill() {
+      const cart = await getCart();
+      const shippingPerson = (cart == null ? void 0 : cart.shippingPerson) || {};
+      const draft = SESSION.getDraft() || {};
+      const formData = {
+        ...getEmptyFormData(),
+        ...draft,
+        name: draft.name || shippingPerson.name || "",
+        phone: draft.phone || shippingPerson.phone || "",
+        companyName: draft.companyName || shippingPerson.companyName || "",
+        street: draft.street || shippingPerson.street || "",
+        postalCode: draft.postalCode || shippingPerson.postalCode || "",
+        city: draft.city || shippingPerson.city || "",
+        countryName: draft.countryName || shippingPerson.countryName || getDefaultCountryName() || ""
+      };
+      return formData;
+    }
+    function readFormData(form) {
+      const get = (name) => {
+        var _a, _b;
+        return ((_b = (_a = form.querySelector(`[name="${name}"]`)) == null ? void 0 : _a.value) == null ? void 0 : _b.trim()) || "";
+      };
+      return {
+        email: get("email"),
+        name: get("name"),
+        phone: get("phone"),
+        companyName: get("companyName"),
+        street: get("street"),
+        postalCode: get("postalCode"),
+        city: get("city"),
+        countryName: get("countryName")
+      };
+    }
+    function validateFormData(formData) {
+      if (!formData.email || !formData.name || !formData.street || !formData.postalCode || !formData.city || !formData.countryName) {
+        return t("requiredField");
       }
-      const parts = [addr.street, addr.city, addr.postalCode, addr.countryName].filter(Boolean);
-      if (parts.length < 2) return null;
+      if (!isValidEmail(formData.email)) {
+        return t("invalidEmail");
+      }
+      return "";
+    }
+    function mergeSuggestedAddress(baseAddress, suggestion) {
+      return {
+        ...baseAddress,
+        street: suggestion.street || baseAddress.street,
+        postalCode: suggestion.postalCode || baseAddress.postalCode,
+        city: suggestion.city || baseAddress.city,
+        countryName: suggestion.countryName || baseAddress.countryName
+      };
+    }
+    function hasMeaningfulCorrection(inputAddress, suggestedAddress) {
+      const keys = ["street", "postalCode", "city", "countryName"];
+      return keys.some((key) => {
+        return normalizeWhitespace(inputAddress[key]).toLowerCase() !== normalizeWhitespace(suggestedAddress[key]).toLowerCase();
+      });
+    }
+    async function onModalSubmit(event) {
+      if (!state.modalOpen) return;
+      const form = event.target.closest(".pm-addr-form");
+      if (!form) return;
+      event.preventDefault();
+      const rawFormData = readFormData(form);
+      const validationError = validateFormData(rawFormData);
+      if (validationError) {
+        state.formData = rawFormData;
+        state.mode = "form";
+        state.error = validationError;
+        renderModal();
+        return;
+      }
+      const normalizedAddress = normalizeFormData(rawFormData);
+      SESSION.setDraft(normalizedAddress);
+      state.formData = normalizedAddress;
+      state.normalizedAddress = normalizedAddress;
+      state.error = "";
+      state.mode = "loading";
+      state.loadingMessage = t("loadingValidate");
+      renderModal();
+      try {
+        if (!isStepEnabled("GEOAPIFY") || !CONFIG.apiKey) {
+          await commitPrecheckoutData(normalizedAddress, { allowFallback: true });
+          return;
+        }
+        const geoapifyResult = await validateWithGeoapify(normalizedAddress);
+        const suggestion = extractSuggestion(geoapifyResult);
+        const mergedSuggestion = suggestion ? mergeSuggestedAddress(normalizedAddress, suggestion) : null;
+        log("Validation result", {
+          input: normalizedAddress,
+          suggestion: mergedSuggestion
+        });
+        if (mergedSuggestion && suggestion.rankConfidence >= CONFIG.confidenceClean && hasMeaningfulCorrection(normalizedAddress, mergedSuggestion)) {
+          state.suggestedAddress = mergedSuggestion;
+          state.mode = "correction";
+          renderModal();
+          return;
+        }
+        if (mergedSuggestion && suggestion.rankConfidence >= CONFIG.confidenceWarning) {
+          await commitPrecheckoutData(mergedSuggestion, { allowFallback: true });
+          return;
+        }
+        if (!suggestion) {
+          state.mode = "warning";
+          renderModal();
+          return;
+        }
+        if (suggestion.rankConfidence < CONFIG.confidenceWarning) {
+          state.suggestedAddress = mergedSuggestion;
+          state.mode = "warning";
+          renderModal();
+          return;
+        }
+        await commitPrecheckoutData(normalizedAddress, { allowFallback: true });
+      } catch (error) {
+        logError("Validation flow failed", error);
+        await commitPrecheckoutData(normalizedAddress, { allowFallback: true });
+      }
+    }
+    function onModalClick(event) {
+      if (!state.modalOpen) return;
+      const actionEl = event.target.closest("[data-action]");
+      if (!actionEl) return;
+      const action = actionEl.getAttribute("data-action");
+      if (!action) return;
+      if (action === "close") {
+        closeModal();
+        return;
+      }
+      if (action === "edit-address") {
+        state.mode = "form";
+        state.error = "";
+        renderModal();
+        return;
+      }
+      if (action === "use-corrected" && state.suggestedAddress) {
+        commitPrecheckoutData(state.suggestedAddress, { allowFallback: true }).catch((error) => {
+          logError("Failed to commit corrected address", error);
+        });
+        return;
+      }
+      if (action === "use-original" && state.normalizedAddress) {
+        commitPrecheckoutData(state.normalizedAddress, { allowFallback: true }).catch(
+          (error) => {
+            logError("Failed to commit original address", error);
+          }
+        );
+      }
+    }
+    async function commitPrecheckoutData(address, options = {}) {
+      var _a, _b, _c;
+      state.mode = "loading";
+      state.loadingMessage = t("loadingSave");
+      renderModal();
+      try {
+        await setCustomerEmail(address.email);
+        await setShippingAddress(address);
+        SESSION.setDraft(address);
+        closeModal();
+        log("Pre-checkout data stored in Ecwid", address);
+        (_c = (_b = (_a = window.Ecwid) == null ? void 0 : _a.Cart) == null ? void 0 : _b.gotoCheckout) == null ? void 0 : _c.call(_b);
+      } catch (error) {
+        if (!options.allowFallback) {
+          throw error;
+        }
+        logError("Saving pre-checkout data failed", error);
+        state.mode = "form";
+        state.error = t("saveError");
+        renderModal();
+      }
+    }
+    function validateWithGeoapify(address) {
+      if (!CONFIG.apiKey) {
+        logWarn("No Geoapify API key configured. Skipping API validation.");
+        return Promise.resolve(null);
+      }
+      const parts = [
+        address.street,
+        address.postalCode,
+        address.city,
+        address.countryName
+      ].filter(Boolean);
+      if (parts.length < 3) {
+        return Promise.resolve(null);
+      }
       const params = new URLSearchParams({
         text: parts.join(", "),
         limit: "1",
         apiKey: CONFIG.apiKey
       });
-      log("Calling Geoapify", { text: parts.join(", ") });
-      const res = await fetch(
-        `https://api.geoapify.com/v1/geocode/search?${params}`
+      return fetch(`https://api.geoapify.com/v1/geocode/search?${params}`).then(
+        async (response) => {
+          if (!response.ok) {
+            throw new Error(`Geoapify HTTP ${response.status}`);
+          }
+          return response.json();
+        }
       );
-      if (!res.ok) throw new Error(`Geoapify HTTP ${res.status}`);
-      return await res.json();
     }
-    function extractSuggestion(geoapifyResult) {
+    function extractSuggestion(result) {
       var _a, _b;
-      const feat = (_a = geoapifyResult == null ? void 0 : geoapifyResult.features) == null ? void 0 : _a[0];
-      if (!feat) return null;
-      const p = feat.properties;
-      const street = p.housenumber ? `${p.street || ""} ${p.housenumber}`.trim() : p.street || "";
+      const feature = (_a = result == null ? void 0 : result.features) == null ? void 0 : _a[0];
+      if (!feature) return null;
+      const props = feature.properties || {};
+      const street = props.housenumber ? `${props.street || ""} ${props.housenumber}`.trim() : props.street || "";
       return {
-        street: street || null,
-        city: p.city || p.town || p.village || p.municipality || null,
-        postalCode: p.postcode || null,
-        countryName: p.country || null,
-        confidence: ((_b = p.rank) == null ? void 0 : _b.confidence) ?? 0,
-        resultType: p.result_type || "unknown"
+        street: street || "",
+        postalCode: props.postcode || "",
+        city: props.city || props.town || props.village || props.municipality || "",
+        countryName: props.country || "",
+        rankConfidence: ((_b = props.rank) == null ? void 0 : _b.confidence) ?? 0
       };
     }
-    function hasMeaningfulCorrection(input, suggestion) {
-      const n = (v) => (v || "").toLowerCase().trim().replace(/\s+/g, " ");
-      return suggestion.street && n(suggestion.street) !== n(input.street) || suggestion.city && n(suggestion.city) !== n(input.city) || suggestion.postalCode && n(suggestion.postalCode) !== n(input.postalCode);
+    function getCart() {
+      return new Promise((resolve) => {
+        window.Ecwid.Cart.get((cart) => resolve(cart || null));
+      });
     }
-    function setFormControlValue(el, value) {
-      if (!el || value == null) return;
-      const prototype = el instanceof HTMLSelectElement ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
-      const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
-      if (descriptor == null ? void 0 : descriptor.set) {
-        descriptor.set.call(el, value);
-      } else {
-        el.value = value;
-      }
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
+    function setCustomerEmail(email) {
+      return new Promise((resolve, reject) => {
+        window.Ecwid.Cart.setCustomerEmail(
+          email,
+          () => resolve(true),
+          (error) => reject(error || new Error("setCustomerEmail failed"))
+        );
+      });
     }
-    function applySuggestionToDom(suggestion) {
-      const { streetInput, cityInput, zipInput, countryEl } = getAddressDomFields();
-      if (!streetInput && !cityInput && !zipInput && !countryEl) {
-        logWarn("Could not find checkout address inputs to apply correction");
-        return false;
-      }
-      if (suggestion.street && streetInput) {
-        setFormControlValue(streetInput, suggestion.street);
-      }
-      if (suggestion.city && cityInput) {
-        setFormControlValue(cityInput, suggestion.city);
-      }
-      if (suggestion.postalCode && zipInput) {
-        setFormControlValue(zipInput, suggestion.postalCode);
-      }
-      if (suggestion.countryName && countryEl) {
-        const normalize = (value) => (value || "").toLowerCase().trim().replace(/\s+/g, " ");
-        if (countryEl instanceof HTMLSelectElement) {
-          const match = Array.from(countryEl.options).find((option) => {
-            return normalize(option.value) === normalize(suggestion.countryName) || normalize(option.textContent) === normalize(suggestion.countryName);
-          });
-          if (match) {
-            setFormControlValue(countryEl, match.value);
-          } else {
-            logWarn("Skipping country overwrite: no matching Ecwid country option", {
-              suggestion: suggestion.countryName
-            });
-          }
-        } else if (!countryEl.value || normalize(countryEl.value) === normalize(suggestion.countryName)) {
-          setFormControlValue(countryEl, suggestion.countryName);
-        } else {
-          logWarn("Skipping country overwrite: current value differs from suggestion", {
-            current: countryEl.value,
-            suggestion: suggestion.countryName
-          });
-        }
-      }
-      return true;
+    function setShippingAddress(address) {
+      return new Promise((resolve, reject) => {
+        window.Ecwid.Cart.setAddress(
+          {
+            name: address.name,
+            companyName: address.companyName,
+            street: address.street,
+            city: address.city,
+            countryName: address.countryName,
+            postalCode: address.postalCode,
+            phone: address.phone
+          },
+          () => resolve(true),
+          (error) => reject(error || new Error("setAddress failed"))
+        );
+      });
     }
-    async function triggerValidation(domAddr) {
-      if (isStepEnabled("NORMALIZE")) {
-        const normalized = normalizeAddress(domAddr);
-        const normChanged = normalized.street !== domAddr.street;
-        if (normChanged) {
-          log("Normalization changed street", {
-            before: domAddr.street,
-            after: normalized.street
-          });
-          state = "CORRECTION";
-          pendingSuggestion = {
-            street: normalized.street,
-            city: normalized.city,
-            postalCode: normalized.postalCode,
-            countryName: normalized.countryName,
-            confidence: 1,
-            resultType: "normalized"
-          };
-          showCorrectionBanner(domAddr, pendingSuggestion);
-          SESSION.setLastValidated(domAddr);
-          return;
-        }
-      }
-      if (!isStepEnabled("GEOAPIFY") || !CONFIG.apiKey) {
-        log("Geoapify step skipped");
-        return;
-      }
-      state = "VALIDATING";
-      log("Validating with Geoapify...");
-      try {
-        const result = await validateWithGeoapify(domAddr);
-        const suggestion = extractSuggestion(result);
-        log("Geoapify result", {
-          confidence: suggestion == null ? void 0 : suggestion.confidence,
-          resultType: suggestion == null ? void 0 : suggestion.resultType,
-          suggestion
-        });
-        if (!suggestion || suggestion.confidence < CONFIG.confidenceWarning) {
-          state = "WARNING";
-          pendingSuggestion = null;
-          showWarningBanner();
-        } else if (suggestion.confidence >= CONFIG.confidenceClean && !hasMeaningfulCorrection(domAddr, suggestion)) {
-          state = "CLEAN";
-          hideAllUI();
-        } else if (hasMeaningfulCorrection(domAddr, suggestion)) {
-          state = "CORRECTION";
-          pendingSuggestion = suggestion;
-          showCorrectionBanner(domAddr, suggestion);
-        } else {
-          state = "CLEAN";
-          hideAllUI();
-        }
-        SESSION.setLastValidated(domAddr);
-      } catch (err) {
-        logError("Geoapify API error (failing silently)", err);
-        state = "IDLE";
-        hideAllUI();
-      }
+    function isCheckoutTrigger(target) {
+      if (!(target == null ? void 0 : target.closest)) return false;
+      return CHECKOUT_TRIGGER_SELECTORS.some(
+        (selector) => target.closest(selector)
+      );
     }
-    function onAddressFieldBlur() {
-      if (!onCheckoutAddressPage) return;
-      if (SESSION.isDisabled()) {
-        log("Validation disabled for this session");
-        return;
+    function onDocumentClick(event) {
+      if (!state.onCartPage) return;
+      if (state.modalOpen) return;
+      if (!isStepEnabled("INTERCEPT")) return;
+      if (!isCheckoutTrigger(event.target)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === "function") {
+        event.stopImmediatePropagation();
       }
-      if (SESSION.shouldSkipNext()) {
-        log("Skipping validation (programmatic setAddress just ran)");
-        SESSION.clearSkipNext();
-        return;
-      }
-      setTimeout(() => {
-        const addr = readAddressFromDom();
-        if (!addr) {
-          log("Could not read address from DOM");
-          logDetectedFields("blur-no-address");
-          return;
-        }
-        if (!isAddressComplete(addr)) {
-          log("Address not complete yet — skipping", addr);
-          logDetectedFields("blur-incomplete");
-          return;
-        }
-        if (isSameAddress(addr, SESSION.getLastValidated())) {
-          log("Same as last validated address — skipping");
-          return;
-        }
-        log("Address complete and changed — triggering validation", addr);
-        triggerValidation(addr);
-      }, 150);
+      log("Intercepted Ecwid checkout click on cart page");
+      openModal();
     }
-    function onAddressFieldInput() {
-      if (state === "WARNING" || state === "CORRECTION") {
-        log("Manual edit detected after warning — resetting to IDLE");
-        state = "IDLE";
-        hideAllUI();
-      }
-    }
-    function isAddressField(el) {
-      if (!(el == null ? void 0 : el.matches)) return false;
-      return FIELD_SELECTORS.street.some((sel) => el.matches(sel)) || FIELD_SELECTORS.city.some((sel) => el.matches(sel)) || FIELD_SELECTORS.postalCode.some((sel) => el.matches(sel)) || FIELD_SELECTORS.country.some((sel) => el.matches(sel));
-    }
-    function onDocumentFocusOut(event) {
-      if (!isAddressField(event.target)) return;
-      onAddressFieldBlur();
-    }
-    function onDocumentInput(event) {
-      if (!isAddressField(event.target)) return;
-      onAddressFieldInput();
-    }
-    function onDocumentChange(event) {
-      if (!isAddressField(event.target)) return;
-      log("Address field change detected", describeField(event.target));
-      onAddressFieldBlur();
+    function onDocumentKeydown(event) {
+      if (event.key !== "Escape" || !state.modalOpen) return;
+      closeModal();
     }
     function ensureDocumentListeners() {
-      if (documentListenersAttached) return;
-      document.addEventListener("focusout", onDocumentFocusOut, true);
-      document.addEventListener("input", onDocumentInput, true);
-      document.addEventListener("change", onDocumentChange, true);
-      documentListenersAttached = true;
-      log("Document-level address listeners attached");
-    }
-    const BANNER_ID = "pm-addr-banner";
-    function injectStyles() {
-      if (document.getElementById("pm-addr-styles")) return;
-      const style = document.createElement("style");
-      style.id = "pm-addr-styles";
-      style.textContent = `
-      #pm-addr-banner {
-        position: fixed;
-        bottom: 24px;
-        right: 24px;
-        max-width: 360px;
-        width: calc(100vw - 48px);
-        background: #fff;
-        border-radius: 14px;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.08);
-        padding: 18px 20px 16px;
-        z-index: 999999;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif;
-        font-size: 14px;
-        line-height: 1.5;
-        color: #1a1a1a;
-        transform: translateY(calc(100% + 32px));
-        opacity: 0;
-        transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1), opacity 0.25s ease;
-        box-sizing: border-box;
-      }
-      #pm-addr-banner.pm-visible {
-        transform: translateY(0);
-        opacity: 1;
-      }
-      #pm-addr-banner .pm-title {
-        font-weight: 600;
-        font-size: 15px;
-        margin-bottom: 6px;
-        padding-right: 24px;
-      }
-      #pm-addr-banner .pm-body {
-        color: #555;
-        margin-bottom: 14px;
-        font-size: 13.5px;
-      }
-      #pm-addr-banner .pm-diff {
-        background: #f5f5f5;
-        border-radius: 8px;
-        padding: 10px 12px;
-        margin-bottom: 14px;
-        font-size: 13px;
-      }
-      #pm-addr-banner .pm-diff-row {
-        display: flex;
-        gap: 10px;
-        margin-bottom: 4px;
-      }
-      #pm-addr-banner .pm-diff-row:last-child { margin-bottom: 0; }
-      #pm-addr-banner .pm-diff-label {
-        color: #999;
-        min-width: 72px;
-        flex-shrink: 0;
-      }
-      #pm-addr-banner .pm-diff-value {
-        font-weight: 600;
-        color: #1a1a1a;
-      }
-      #pm-addr-banner .pm-actions {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-      #pm-addr-banner .pm-btn {
-        padding: 8px 14px;
-        border-radius: 8px;
-        border: none;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 500;
-        transition: opacity 0.15s, transform 0.1s;
-        line-height: 1;
-      }
-      #pm-addr-banner .pm-btn:hover { opacity: 0.80; }
-      #pm-addr-banner .pm-btn:active { transform: scale(0.97); }
-      #pm-addr-banner .pm-btn-primary {
-        background: #111;
-        color: #fff;
-      }
-      #pm-addr-banner .pm-btn-ghost {
-        background: #efefef;
-        color: #444;
-      }
-      #pm-addr-banner .pm-close {
-        position: absolute;
-        top: 12px;
-        right: 14px;
-        background: none;
-        border: none;
-        cursor: pointer;
-        font-size: 18px;
-        color: #bbb;
-        line-height: 1;
-        padding: 2px 4px;
-        border-radius: 4px;
-        transition: color 0.15s;
-      }
-      #pm-addr-banner .pm-close:hover { color: #555; }
-    `;
-      document.head.appendChild(style);
-    }
-    function getOrCreateBanner() {
-      let banner = document.getElementById(BANNER_ID);
-      if (!banner) {
-        banner = document.createElement("div");
-        banner.id = BANNER_ID;
-        document.body.appendChild(banner);
-      }
-      return banner;
-    }
-    function showBanner(html) {
-      if (!isStepEnabled("UI")) {
-        logWarn("UI step disabled — skipping banner render");
-        return;
-      }
-      injectStyles();
-      const banner = getOrCreateBanner();
-      banner.innerHTML = html;
-      void banner.offsetHeight;
-      banner.classList.add("pm-visible");
-    }
-    function hideAllUI() {
-      const banner = document.getElementById(BANNER_ID);
-      if (!banner) return;
-      banner.classList.remove("pm-visible");
-    }
-    function showWarningBanner() {
-      var _a, _b;
-      showBanner(`
-      <button class="pm-close" aria-label="Sluiten">&times;</button>
-      <div class="pm-title">&#9888;&#65039; Adres controleren</div>
-      <div class="pm-body">
-        Dit adres lijkt niet te kloppen&hellip; Weet je zeker dat je het juiste adres hebt ingevuld?
-      </div>
-      <div class="pm-actions">
-        <button class="pm-btn pm-btn-ghost" id="pm-addr-confirm">Dit adres klopt zeker</button>
-      </div>
-    `);
-      (_a = document.getElementById("pm-addr-confirm")) == null ? void 0 : _a.addEventListener("click", onConfirmAddress);
-      (_b = document.querySelector("#pm-addr-banner .pm-close")) == null ? void 0 : _b.addEventListener("click", hideAllUI);
-    }
-    function showCorrectionBanner(inputAddr, suggestion) {
-      var _a, _b, _c;
-      const n = (v) => (v || "").trim();
-      const diffFields = [
-        {
-          label: "Straat",
-          input: inputAddr.street,
-          suggested: suggestion.street
-        },
-        {
-          label: "Postcode",
-          input: inputAddr.postalCode,
-          suggested: suggestion.postalCode
-        },
-        { label: "Stad", input: inputAddr.city, suggested: suggestion.city }
-      ].filter(
-        (f) => f.suggested && n(f.suggested).toLowerCase() !== n(f.input).toLowerCase()
-      );
-      if (diffFields.length === 0) {
-        hideAllUI();
-        return;
-      }
-      const diffHtml = diffFields.map(
-        (f) => `
-      <div class="pm-diff-row">
-        <span class="pm-diff-label">${f.label}</span>
-        <span class="pm-diff-value">${escapeHtml(f.suggested)}</span>
-      </div>`
-      ).join("");
-      showBanner(`
-      <button class="pm-close" aria-label="Sluiten">&times;</button>
-      <div class="pm-title">&#9999;&#65039; Adres gecorrigeerd</div>
-      <div class="pm-body">We hebben je adres gecorrigeerd. Klopt dit?</div>
-      <div class="pm-diff">${diffHtml}</div>
-      <div class="pm-actions">
-        <button class="pm-btn pm-btn-primary" id="pm-addr-apply">Ja, pas toe</button>
-        <button class="pm-btn pm-btn-ghost" id="pm-addr-confirm">Dit adres klopt zeker</button>
-      </div>
-    `);
-      (_a = document.getElementById("pm-addr-apply")) == null ? void 0 : _a.addEventListener("click", () => onApplyCorrection(suggestion));
-      (_b = document.getElementById("pm-addr-confirm")) == null ? void 0 : _b.addEventListener("click", onConfirmAddress);
-      (_c = document.querySelector("#pm-addr-banner .pm-close")) == null ? void 0 : _c.addEventListener("click", hideAllUI);
-    }
-    function onConfirmAddress() {
-      log("User confirmed address as correct — disabling checks for session");
-      SESSION.disable();
-      state = "IDLE";
-      hideAllUI();
-    }
-    async function onApplyCorrection(suggestion) {
-      log("Applying correction", suggestion);
-      const applied = applySuggestionToDom(suggestion);
-      if (!applied) return;
-      SESSION.setSkipNext();
-      state = "IDLE";
-      hideAllUI();
-      const updatedAddr = readAddressFromDom();
-      if (updatedAddr) {
-        SESSION.setLastValidated(updatedAddr);
-      }
-      log("Correction applied to checkout form");
+      if (state.documentListenersAttached) return;
+      document.addEventListener("click", onDocumentClick, true);
+      document.addEventListener("keydown", onDocumentKeydown, true);
+      state.documentListenersAttached = true;
+      log("Document-level pre-checkout listeners attached");
     }
     function onPageLoaded(page) {
-      log("Page loaded", { type: page == null ? void 0 : page.type });
-      const isCheckoutAddress = (page == null ? void 0 : page.type) === "CHECKOUT_ADDRESS" || (page == null ? void 0 : page.type) === "CHECKOUT";
-      if (isCheckoutAddress) {
-        onCheckoutAddressPage = true;
-        if (!SESSION.isDisabled()) {
-          ensureDocumentListeners();
-          logDetectedFields("page-loaded");
-        } else {
-          log("Validation disabled for session");
-        }
-      } else {
-        onCheckoutAddressPage = false;
-        hideAllUI();
+      log("Ecwid page loaded", { type: page == null ? void 0 : page.type });
+      state.onCartPage = (page == null ? void 0 : page.type) === "CART";
+      if (!state.onCartPage && state.modalOpen) {
+        closeModal();
       }
     }
-    log("Initializing Address Validation Module");
+    log("=== Address Validation V2: Pre-checkout flow ===");
+    log("Config", {
+      apiKey: CONFIG.apiKey ? "***set***" : "(not set)",
+      ADDR_DEBUG: isDebug(),
+      ADDR_STEP_INTERCEPT: isStepEnabled("INTERCEPT"),
+      ADDR_STEP_NORMALIZE: isStepEnabled("NORMALIZE"),
+      ADDR_STEP_GEOAPIFY: isStepEnabled("GEOAPIFY")
+    });
     (async () => {
-      await waitForEcwid();
-      window.Ecwid.OnAPILoaded.add(() => {
-        window.Ecwid.OnPageLoaded.add(onPageLoaded);
-        log("Address Validation Module initialized ✓");
-      });
+      try {
+        await waitForEcwid();
+        window.Ecwid.OnAPILoaded.add(() => {
+          ensureDocumentListeners();
+          window.Ecwid.OnPageLoaded.add(onPageLoaded);
+          log("Pre-checkout address module initialized");
+        });
+      } catch (error) {
+        logError("Failed to initialize pre-checkout address module", error);
+      }
     })();
   }
   const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
-  const BUNDLE_VERSION = "2026-03-20-address-full-2";
+  const BUNDLE_VERSION = "2026-03-21-precheckout-1";
   function safeInit(name, init) {
     try {
       init();
