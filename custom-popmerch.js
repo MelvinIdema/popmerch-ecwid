@@ -376,26 +376,24 @@
       }
 
       .pm-addr-card {
-        border: 1px solid #d7dde3;
-        border-radius: 8px;
-        background: #f8fafc;
+        border: 2px solid #111111;
+        border-radius: 10px;
+        background: #ffffff;
         padding: 16px 18px;
         color: #191919;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
       }
 
       .pm-addr-card--warning {
-        background: #fff7ed;
-        border-color: #f2c48d;
+        background: #fff8f1;
       }
 
       .pm-addr-card--success {
-        background: #edf9f0;
-        border-color: #8bc89a;
+        background: #f4fbf5;
       }
 
       .pm-addr-card--loading {
-        background: #f5f7fa;
-        border-color: #d7dde3;
+        background: #f7f7f7;
       }
 
       .pm-addr-card__title {
@@ -416,8 +414,8 @@
         margin-top: 12px;
         padding: 12px 14px;
         border-radius: 6px;
-        background: rgba(255, 255, 255, 0.75);
-        border: 1px solid rgba(0, 0, 0, 0.06);
+        background: #ffffff;
+        border: 1px solid #d9d9d9;
       }
 
       .pm-addr-card__suggestion-label {
@@ -441,28 +439,40 @@
         gap: 10px;
         flex-wrap: wrap;
         margin-top: 14px;
+        align-items: center;
       }
 
       .pm-addr-card__button {
         appearance: none;
-        border: none;
-        border-radius: 6px;
-        min-height: 40px;
-        padding: 0 16px;
+        border-radius: 4px;
+        min-height: 48px;
+        padding: 0 18px;
         font-size: 14px;
         font-weight: 600;
         cursor: pointer;
+        transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+        font-family: inherit;
       }
 
       .pm-addr-card__button--primary {
         background: #191919;
         color: #ffffff;
+        border: 1px solid #191919;
       }
 
       .pm-addr-card__button--ghost {
         background: #ffffff;
         color: #191919;
-        border: 1px solid #d1d5db;
+        border: 1px solid #191919;
+      }
+
+      .pm-addr-card__button--primary:hover {
+        background: #000000;
+        border-color: #000000;
+      }
+
+      .pm-addr-card__button--ghost:hover {
+        background: #f5f5f5;
       }
 
       .pm-addr-spinner {
@@ -722,8 +732,17 @@
           confidence,
           suggestion
         });
-        if (confidence >= CONFIG.confidenceClean && !hasSuggestion) {
-          state.acceptedFingerprint = fingerprint;
+        if (confidence >= CONFIG.confidenceClean) {
+          const acceptedAddress = hasSuggestion ? normalizeAddress({
+            ...normalizedAddress,
+            ...suggestion
+          }) : normalizedAddress;
+          if (hasSuggestion) {
+            applySuggestionToDom(acceptedAddress);
+          }
+          state.originalAddress = acceptedAddress;
+          state.acceptedFingerprint = fingerprintAddress(acceptedAddress);
+          state.pendingSuggestion = null;
           setUiState("valid");
           return true;
         }
@@ -961,7 +980,7 @@
     window.addEventListener("resize", scheduleSync, { passive: true });
   }
   const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
-  const BUNDLE_VERSION = "2026-03-21-mobile-filter-zindex";
+  const BUNDLE_VERSION = "2026-03-21-inline-checkout-3";
   function safeInit(name, init) {
     try {
       init();

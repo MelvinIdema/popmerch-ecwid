@@ -4,7 +4,7 @@ import { initMobileFilterTileStacking } from "./mobile-filter-tile-stacking.js";
 
 // Replace with your Geoapify API key (https://myprojects.geoapify.com)
 const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
-const BUNDLE_VERSION = "2026-03-21-mobile-filter-zindex";
+const BUNDLE_VERSION = "2026-03-21-inline-checkout-3";
 const ENABLE_ADDRESS_VALIDATION = true;
 
 function safeInit(name, init) {
