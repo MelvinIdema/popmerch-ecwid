@@ -25,61 +25,33 @@ export function initCurrencySwitcher(config = {}) {
   };
 
   const LOCALE_CURRENCY_MAP = {
-    "nl": "EUR",
-    "de": "EUR",
-    "fr": "EUR",
-    "es": "EUR",
-    "it": "EUR",
-    "pt": "EUR",
-    "fi": "EUR",
-    "el": "EUR",
-    "en-GB": "GBP",
-    "en-IE": "EUR",
-    "en-US": "USD",
-    "en-CA": "CAD",
-    "en-AU": "AUD",
-    "sv": "SEK",
-    "no": "NOK",
-    "nb": "NOK",
-    "nn": "NOK",
-    "da": "DKK",
-    "pl": "PLN",
-    "cs": "CZK",
-    "hu": "HUF",
-    "ja": "JPY",
-    "fr-CH": "CHF",
-    "de-CH": "CHF",
-    "it-CH": "CHF",
+    "nl": "EUR", "de": "EUR", "fr": "EUR", "es": "EUR", "it": "EUR",
+    "pt": "EUR", "fi": "EUR", "el": "EUR",
+    "en-GB": "GBP", "en-IE": "EUR", "en-US": "USD", "en-CA": "CAD", "en-AU": "AUD",
+    "sv": "SEK", "no": "NOK", "nb": "NOK", "nn": "NOK", "da": "DKK",
+    "pl": "PLN", "cs": "CZK", "hu": "HUF", "ja": "JPY",
+    "fr-CH": "CHF", "de-CH": "CHF", "it-CH": "CHF",
   };
 
   const ZERO_DECIMAL = new Set(["JPY", "HUF"]);
 
-  // Shared mutable state within this closure
+  // ─── Module-level mutable state ───────────────────────────────────────────
   let cachedRates = null;
+  let currentBarSelect = null; // always points to the live bar <select>
+  let inlineSyncFn = null;     // product-page listener, replaced on each SPA nav
+
+  // The bar's syncFn is added once and never removed.
+  // The inline syncFn is removed on nav and re-added on mount.
+  const syncListeners = new Set();
 
   // ─── Debug ────────────────────────────────────────────────────────────────
 
-  function isDebug() {
-    try {
-      return localStorage.getItem("CURRENCY_DEBUG") === "true";
-    } catch {
-      return false;
-    }
-  }
-
-  function log(message, data = null) {
-    if (!isDebug()) return;
-    const style =
-      "background:#7b1fa2;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
+  function log(msg, data = null) {
+    if (localStorage.getItem("CURRENCY_DEBUG") !== "true") return;
+    const s = "background:#7b1fa2;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
     data != null
-      ? console.log(`%c[Currency]%c ${message}`, style, "", data)
-      : console.log(`%c[Currency]%c ${message}`, style, "");
-  }
-
-  function logError(message, error) {
-    const style =
-      "background:#c62828;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
-    console.error(`%c[Currency]%c ${message}`, style, "", error);
+      ? console.log(`%c[Currency]%c ${msg}`, s, "", data)
+      : console.log(`%c[Currency]%c ${msg}`, s, "");
   }
 
   // ─── Preferences ─────────────────────────────────────────────────────────
@@ -87,8 +59,7 @@ export function initCurrencySwitcher(config = {}) {
   function detectBrowserCurrency() {
     const lang = navigator.language || "en";
     if (LOCALE_CURRENCY_MAP[lang]) return LOCALE_CURRENCY_MAP[lang];
-    const base = lang.split("-")[0];
-    return LOCALE_CURRENCY_MAP[base] || BASE_CURRENCY;
+    return LOCALE_CURRENCY_MAP[lang.split("-")[0]] || BASE_CURRENCY;
   }
 
   function getSelectedCurrency() {
@@ -100,9 +71,7 @@ export function initCurrencySwitcher(config = {}) {
   }
 
   function saveSelectedCurrency(currency) {
-    try {
-      localStorage.setItem(PREF_KEY, currency);
-    } catch {}
+    try { localStorage.setItem(PREF_KEY, currency); } catch {}
   }
 
   // ─── Exchange rates ───────────────────────────────────────────────────────
@@ -111,68 +80,48 @@ export function initCurrencySwitcher(config = {}) {
     try {
       const raw = localStorage.getItem(CACHE_KEY);
       if (!raw) return null;
-      const cached = JSON.parse(raw);
-      if (cached && Date.now() - cached.ts < CACHE_TTL) return cached.rates;
+      const { rates, ts } = JSON.parse(raw);
+      if (Date.now() - ts < CACHE_TTL) return rates;
     } catch {}
     return null;
   }
 
   function setCachedRates(rates) {
-    try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ rates, ts: Date.now() }));
-    } catch {}
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({ rates, ts: Date.now() })); } catch {}
   }
 
   async function fetchRates() {
     const cached = getCachedRates();
-    if (cached) {
-      log("Using cached rates", cached);
-      return cached;
-    }
+    if (cached) { log("Using cached rates"); return cached; }
 
-    log("Fetching rates from Frankfurter");
+    log("Fetching rates…");
     try {
-      const resp = await fetch(
-        `https://api.frankfurter.dev/v1/latest?base=${BASE_CURRENCY}`,
-      );
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      const rates = { ...data.rates, [BASE_CURRENCY]: 1 };
-      setCachedRates(rates);
-      log("Rates fetched", rates);
-      return rates;
-    } catch (err) {
-      log("Frankfurter failed, trying fallback", err);
+      const res = await fetch(`https://api.frankfurter.dev/v1/latest?base=${BASE_CURRENCY}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { rates } = await res.json();
+      const all = { ...rates, [BASE_CURRENCY]: 1 };
+      setCachedRates(all);
+      return all;
+    } catch {
       try {
         const key = BASE_CURRENCY.toLowerCase();
-        const resp = await fetch(
-          `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/${key}.json`,
+        const res = await fetch(
+          `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/${key}.json`
         );
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-        const rates = {};
-        for (const [code, rate] of Object.entries(data[key] || {})) {
-          rates[code.toUpperCase()] = rate;
-        }
-        rates[BASE_CURRENCY] = 1;
-        setCachedRates(rates);
-        log("Rates fetched from fallback", rates);
-        return rates;
-      } catch (err2) {
-        logError("Both rate sources failed", err2);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const all = { [BASE_CURRENCY]: 1 };
+        for (const [c, r] of Object.entries(data[key] || {})) all[c.toUpperCase()] = r;
+        setCachedRates(all);
+        return all;
+      } catch (err) {
+        console.error("[Currency] Both rate sources failed", err);
         return null;
       }
     }
   }
 
   // ─── Price conversion ─────────────────────────────────────────────────────
-
-  function convertPrice(basePrice, targetCurrency, rates) {
-    if (targetCurrency === BASE_CURRENCY) return basePrice;
-    const rate = rates[targetCurrency];
-    if (rate == null) return null;
-    return basePrice * rate;
-  }
 
   function formatPrice(amount, currency) {
     try {
@@ -183,76 +132,71 @@ export function initCurrencySwitcher(config = {}) {
         maximumFractionDigits: ZERO_DECIMAL.has(currency) ? 0 : 2,
       }).format(amount);
     } catch {
-      const decimals = ZERO_DECIMAL.has(currency) ? 0 : 2;
-      return `${CURRENCIES[currency]?.symbol || currency} ${amount.toFixed(decimals)}`;
+      return `${CURRENCIES[currency]?.symbol ?? currency} ${amount.toFixed(ZERO_DECIMAL.has(currency) ? 0 : 2)}`;
     }
   }
 
-  // ─── Price replacement ────────────────────────────────────────────────────
-
-  // Replace the visible price text without destroying child element structure.
-  // We walk text nodes and replace the first one that contains digits (the price).
-  // Using TreeWalker (characterData mutation) avoids triggering our childList
-  // MutationObserver, preventing any feedback loop.
+  // Replace the visible price text inside an element while preserving child structure.
+  // Targeting the text node emits only characterData mutations, not childList, so our
+  // MutationObserver (which watches childList) cannot be triggered by this call.
   function setPriceText(el, text) {
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
-      acceptNode: (node) =>
-        /\d/.test(node.textContent) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
+      acceptNode: (n) => (/\d/.test(n.textContent) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP),
     });
-    const textNode = walker.nextNode();
-    if (textNode) {
-      textNode.textContent = text;
-    } else {
-      el.textContent = text;
-    }
+    const node = walker.nextNode();
+    if (node) { node.textContent = text; }
+    else { el.textContent = text; }
   }
 
-  // Convert (or restore) every [itemprop="price"][content] element on the page.
-  // The `content` attribute always holds the original EUR value set by Ecwid,
-  // so we can safely re-derive the base price at any time.
+  // Reconvert every schema.org price element on the page.
+  // `content` attribute always holds the authoritative EUR price set by Ecwid.
   function convertAllPrices(currency, rates) {
-    const priceEls = document.querySelectorAll('[itemprop="price"][content]');
-    log(`Converting ${priceEls.length} price element(s) to ${currency}`);
-    for (const el of priceEls) {
-      const basePrice = parseFloat(el.getAttribute("content"));
-      if (isNaN(basePrice) || basePrice <= 0) continue;
-      const amount = convertPrice(basePrice, currency, rates);
-      if (amount === null) continue;
-      setPriceText(el, formatPrice(amount, currency));
+    const els = document.querySelectorAll("[itemprop='price'][content]");
+    log(`Converting ${els.length} price(s) → ${currency}`);
+    for (const el of els) {
+      const base = parseFloat(el.getAttribute("content"));
+      if (!base || base <= 0) continue;
+      const rate = rates[currency];
+      if (rate == null) continue;
+      setPriceText(el, formatPrice(base * rate, currency));
     }
   }
 
-  // Watch for price elements added by Ecwid's SPA navigation and convert them.
+  // Convert prices in elements newly added by Ecwid's SPA navigation.
   function watchForNewPrices() {
     const observer = new MutationObserver((mutations) => {
       if (!cachedRates) return;
       const currency = getSelectedCurrency();
       if (currency === BASE_CURRENCY) return;
+      const rate = cachedRates[currency];
+      if (rate == null) return;
 
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
+      for (const { addedNodes } of mutations) {
+        for (const node of addedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
           const candidates = node.matches("[itemprop='price'][content]")
             ? [node]
             : [...node.querySelectorAll("[itemprop='price'][content]")];
           for (const el of candidates) {
-            const basePrice = parseFloat(el.getAttribute("content"));
-            if (isNaN(basePrice) || basePrice <= 0) continue;
-            const amount = convertPrice(basePrice, currency, cachedRates);
-            if (amount !== null) setPriceText(el, formatPrice(amount, currency));
+            const base = parseFloat(el.getAttribute("content"));
+            if (base > 0) setPriceText(el, formatPrice(base * rate, currency));
           }
         }
       }
     });
 
-    const attach = () =>
-      observer.observe(document.body, { childList: true, subtree: true });
+    const attach = () => observer.observe(document.body, { childList: true, subtree: true });
+    document.body ? attach() : document.addEventListener("DOMContentLoaded", attach, { once: true });
+  }
 
-    if (document.body) {
-      attach();
-    } else {
-      document.addEventListener("DOMContentLoaded", attach, { once: true });
+  // ─── Currency change handler ──────────────────────────────────────────────
+
+  function onCurrencyChange(currency, sourceFn) {
+    saveSelectedCurrency(currency);
+    for (const fn of syncListeners) {
+      if (fn !== sourceFn) fn(currency);
     }
+    if (cachedRates) convertAllPrices(currency, cachedRates);
   }
 
   // ─── Styles ───────────────────────────────────────────────────────────────
@@ -271,7 +215,6 @@ export function initCurrencySwitcher(config = {}) {
         font-family: inherit;
         flex-wrap: wrap;
       }
-
       #pm-currency-switcher .pm-currency__label {
         font-size: 12px;
         font-weight: 600;
@@ -279,13 +222,11 @@ export function initCurrencySwitcher(config = {}) {
         text-transform: uppercase;
         color: #888;
       }
-
       .pm-currency__select-wrap {
         position: relative;
         display: inline-flex;
         align-items: center;
       }
-
       .pm-currency__select {
         appearance: none;
         -webkit-appearance: none;
@@ -302,17 +243,8 @@ export function initCurrencySwitcher(config = {}) {
         font-family: inherit;
         line-height: 1.4;
       }
-
-      .pm-currency__select:hover {
-        background: #efefef;
-        border-color: #bbb;
-      }
-
-      .pm-currency__select:focus {
-        border-color: #555;
-        background: #fff;
-      }
-
+      .pm-currency__select:hover { background: #efefef; border-color: #bbb; }
+      .pm-currency__select:focus { border-color: #555; background: #fff; }
       .pm-currency__arrow {
         position: absolute;
         right: 9px;
@@ -329,7 +261,6 @@ export function initCurrencySwitcher(config = {}) {
         align-items: center;
         gap: 2px;
       }
-
       .announcement-bar__currency .pm-currency__bar-select {
         appearance: none;
         -webkit-appearance: none;
@@ -345,12 +276,10 @@ export function initCurrencySwitcher(config = {}) {
         outline: none;
         line-height: inherit;
       }
-
       .announcement-bar__currency .pm-currency__bar-select option {
         color: #222;
         background: #fff;
       }
-
       .announcement-bar__currency .pm-currency__bar-arrow {
         position: absolute;
         right: 0;
@@ -362,35 +291,133 @@ export function initCurrencySwitcher(config = {}) {
       }
     `;
     document.head.appendChild(style);
-    log("Styles injected");
   }
 
   // ─── Shared select builder ────────────────────────────────────────────────
 
   function buildSelectOptions(select, selectedCurrency) {
     select.innerHTML = "";
-    for (const [code, info] of Object.entries(CURRENCIES)) {
-      const option = document.createElement("option");
-      option.value = code;
-      option.textContent = `${code} — ${info.name}`;
-      if (code === selectedCurrency) option.selected = true;
-      select.appendChild(option);
+    for (const [code, { name }] of Object.entries(CURRENCIES)) {
+      const opt = document.createElement("option");
+      opt.value = code;
+      opt.textContent = `${code} — ${name}`;
+      if (code === selectedCurrency) opt.selected = true;
+      select.appendChild(opt);
     }
   }
 
-  // ─── Sync helpers ─────────────────────────────────────────────────────────
+  // ─── Vue lifecycle hook helper ────────────────────────────────────────────
+  //
+  // Instead of fighting Vue with a MutationObserver, we hook directly into the
+  // Vue component's updated() lifecycle so we re-inject only when Vue itself has
+  // finished a render pass — eliminating the flash.
+  //
+  // Vue 3  stores onUpdated hooks in instance.u  (array of functions)
+  // Vue 2  exposes $on("hook:updated", fn) on the component proxy
+  //
+  // Returns true if the hook was successfully registered, false if Vue is not
+  // accessible (in which case the caller should use a MutationObserver fallback).
 
-  // Notify all other selects when one changes, without causing loops.
-  const syncListeners = new Set();
+  function hookVueUpdated(el, callback) {
+    // Walk up a couple of levels to find the owning component instance
+    for (const node of [el, el.parentElement, el.parentElement?.parentElement]) {
+      if (!node) continue;
 
-  function onCurrencyChange(currency, source) {
-    saveSelectedCurrency(currency);
-    for (const fn of syncListeners) {
-      if (fn !== source) fn(currency);
+      // Vue 3 — internal instance
+      const inst3 = node.__vueParentComponent ?? node._vueParentComponent;
+      if (inst3) {
+        if (!Array.isArray(inst3.u)) inst3.u = [];
+        inst3.u.push(callback);
+        log("Hooked into Vue 3 onUpdated");
+        return true;
+      }
+
+      // Vue 2 — public proxy
+      const inst2 = node.__vue__;
+      if (inst2?.$on) {
+        inst2.$on("hook:updated", callback);
+        log("Hooked into Vue 2 $on hook:updated");
+        return true;
+      }
     }
-    if (cachedRates) {
-      convertAllPrices(currency, cachedRates);
+    return false;
+  }
+
+  // ─── Announcement bar switcher ────────────────────────────────────────────
+  //
+  // Strategy
+  // ────────
+  // 1. Poll until Vue has hydrated the announcement bar element.
+  // 2. Inject our <select> into the currency element.
+  // 3. Register an onUpdated hook on the Vue component that owns the bar.
+  //    After every Vue re-render we check whether our select survived; if not
+  //    we re-inject.  This is the Vue-native approach — no MutationObserver needed.
+  // 4. If Vue internals are not accessible (unlikely but safe), fall back to a
+  //    targeted MutationObserver on the currency element's parent.
+  //
+  // The persistent barSyncFn closes over `currentBarSelect` (a mutable ref),
+  // so it stays valid across re-injections without ever leaving syncListeners.
+
+  function mountBarSwitcher() {
+    const barSyncFn = (currency) => {
+      if (currentBarSelect) currentBarSelect.value = currency;
+    };
+    syncListeners.add(barSyncFn);
+
+    function doBarInject(currencyEl) {
+      if (currencyEl.querySelector(".pm-currency__bar-wrap")) return; // already present
+
+      injectStyles();
+      currencyEl.textContent = ""; // clear Vue's "EUR" text node
+
+      const wrap = document.createElement("span");
+      wrap.className = "pm-currency__bar-wrap";
+
+      const select = document.createElement("select");
+      select.className = "pm-currency__bar-select";
+      select.setAttribute("aria-label", "Select display currency");
+      buildSelectOptions(select, getSelectedCurrency());
+      currentBarSelect = select; // update the module-level mutable ref
+
+      const arrow = document.createElement("span");
+      arrow.className = "pm-currency__bar-arrow";
+      arrow.setAttribute("aria-hidden", "true");
+      arrow.textContent = "▼";
+
+      wrap.appendChild(select);
+      wrap.appendChild(arrow);
+      currencyEl.appendChild(wrap);
+
+      select.addEventListener("change", () => onCurrencyChange(select.value, barSyncFn));
+      log("Bar switcher injected");
     }
+
+    let attempts = 0;
+    const poll = setInterval(() => {
+      attempts++;
+      const currencyEl = document.querySelector(".announcement-bar__currency");
+
+      if (currencyEl) {
+        clearInterval(poll);
+        doBarInject(currencyEl);
+
+        // Primary: hook into Vue's updated() lifecycle — re-inject after each render
+        const hooked = hookVueUpdated(currencyEl, () => doBarInject(currencyEl));
+
+        if (!hooked) {
+          // Fallback: watch only the currency element's immediate parent, not all of body
+          log("Vue not accessible — falling back to targeted MutationObserver");
+          const obs = new MutationObserver(() => doBarInject(currencyEl));
+          obs.observe(currencyEl.parentElement ?? currencyEl, { childList: true });
+        }
+        return;
+      }
+
+      if (attempts >= 60) {
+        clearInterval(poll);
+        log("Announcement bar not found after polling");
+      }
+    }, POLL_INTERVAL);
   }
 
   // ─── Inline product-page switcher ────────────────────────────────────────
@@ -398,7 +425,6 @@ export function initCurrencySwitcher(config = {}) {
   function mountInlineSwitcher(insertBeforeEl) {
     if (document.getElementById(INLINE_ID)) return;
 
-    const selectedCurrency = getSelectedCurrency();
     injectStyles();
 
     const wrapper = document.createElement("div");
@@ -414,7 +440,7 @@ export function initCurrencySwitcher(config = {}) {
     const select = document.createElement("select");
     select.className = "pm-currency__select";
     select.setAttribute("aria-label", "Select display currency");
-    buildSelectOptions(select, selectedCurrency);
+    buildSelectOptions(select, getSelectedCurrency());
 
     const arrow = document.createElement("span");
     arrow.className = "pm-currency__arrow";
@@ -425,112 +451,37 @@ export function initCurrencySwitcher(config = {}) {
     selectWrap.appendChild(arrow);
     wrapper.appendChild(label);
     wrapper.appendChild(selectWrap);
-
     insertBeforeEl.parentNode.insertBefore(wrapper, insertBeforeEl);
-    log("Inline switcher mounted", { selectedCurrency });
 
-    const syncFn = (currency) => {
-      select.value = currency;
-    };
+    const syncFn = (currency) => { select.value = currency; };
+    inlineSyncFn = syncFn;
     syncListeners.add(syncFn);
 
-    select.addEventListener("change", () => {
-      onCurrencyChange(select.value, syncFn);
-    });
-  }
-
-  // ─── Announcement bar switcher ────────────────────────────────────────────
-
-  function mountBarSwitcher() {
-    // The announcement bar renders as a Vue component; try with polling
-    let attempts = 0;
-    const MAX = 60; // 3 seconds
-
-    const poll = setInterval(() => {
-      attempts++;
-
-      const currencyEl = document.querySelector(".announcement-bar__currency");
-
-      if (currencyEl && !currencyEl.querySelector(".pm-currency__bar-wrap")) {
-        clearInterval(poll);
-        injectStyles();
-
-        const selectedCurrency = getSelectedCurrency();
-
-        // Clear the existing "EUR" text
-        currencyEl.textContent = "";
-
-        const wrap = document.createElement("span");
-        wrap.className = "pm-currency__bar-wrap";
-
-        const select = document.createElement("select");
-        select.className = "pm-currency__bar-select";
-        select.setAttribute("aria-label", "Select display currency");
-        buildSelectOptions(select, selectedCurrency);
-
-        const arrow = document.createElement("span");
-        arrow.className = "pm-currency__bar-arrow";
-        arrow.setAttribute("aria-hidden", "true");
-        arrow.textContent = "▼";
-
-        wrap.appendChild(select);
-        wrap.appendChild(arrow);
-        currencyEl.appendChild(wrap);
-
-        log("Bar switcher mounted", selectedCurrency);
-
-        const syncFn = (currency) => {
-          select.value = currency;
-        };
-        syncListeners.add(syncFn);
-
-        select.addEventListener("change", () => {
-          onCurrencyChange(select.value, syncFn);
-        });
-        return;
-      }
-
-      if (attempts >= MAX) {
-        clearInterval(poll);
-        log("Announcement bar not found after polling");
-      }
-    }, POLL_INTERVAL);
+    select.addEventListener("change", () => onCurrencyChange(select.value, syncFn));
+    log("Inline switcher mounted");
   }
 
   // ─── Product page handler ─────────────────────────────────────────────────
 
   function handleProductPage() {
-    // Remove stale switcher from previous SPA navigation
-    const existing = document.getElementById(INLINE_ID);
-    if (existing) existing.remove();
-    // Clear inline sync listener by rebuilding from scratch on each product page
-    syncListeners.clear();
-    // Re-add bar sync listener if bar select already exists
-    const barSelect = document.querySelector(".pm-currency__bar-select");
-    if (barSelect) {
-      const syncFn = (currency) => {
-        barSelect.value = currency;
-      };
-      syncListeners.add(syncFn);
+    document.getElementById(INLINE_ID)?.remove();
+
+    // Remove only the inline listener — the persistent bar listener must stay
+    if (inlineSyncFn) {
+      syncListeners.delete(inlineSyncFn);
+      inlineSyncFn = null;
     }
 
     let attempts = 0;
-
     const poll = setInterval(() => {
       attempts++;
-
       const priceRow = document.querySelector(".product-details__product-price-row");
-
       if (priceRow) {
         clearInterval(poll);
         mountInlineSwitcher(priceRow);
-        // Price elements are now present — apply conversion immediately
-        if (cachedRates) {
-          convertAllPrices(getSelectedCurrency(), cachedRates);
-        }
+        if (cachedRates) convertAllPrices(getSelectedCurrency(), cachedRates);
         return;
       }
-
       if (attempts >= POLL_MAX_ATTEMPTS) {
         clearInterval(poll);
         log("Price row not found after polling");
@@ -540,26 +491,20 @@ export function initCurrencySwitcher(config = {}) {
 
   // ─── Boot ─────────────────────────────────────────────────────────────────
 
-  // Announcement bar is persistent across pages — mount once
-  mountBarSwitcher();
+  mountBarSwitcher();   // Vue-lifecycle-aware bar select
+  watchForNewPrices();  // MutationObserver for SPA-added price elements
 
-  // Watch for prices added by SPA navigation
-  watchForNewPrices();
-
-  // Fetch rates once; convert any prices already on the page
   fetchRates().then((rates) => {
     if (!rates) return;
     cachedRates = rates;
     convertAllPrices(getSelectedCurrency(), rates);
   });
 
-  // Product page inline switcher — mount on each product page load
-  window.Ecwid?.OnPageLoaded?.add(function (page) {
-    log("Page loaded", page.type);
+  window.Ecwid?.OnPageLoaded?.add((page) => {
+    log("OnPageLoaded", page.type);
     if (page.type === "PRODUCT") {
       handleProductPage();
     } else if (cachedRates) {
-      // Re-convert prices on listing/category/search pages after Ecwid renders them
       setTimeout(() => convertAllPrices(getSelectedCurrency(), cachedRates), 150);
     }
   });
