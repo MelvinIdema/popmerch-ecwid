@@ -163,7 +163,8 @@
       uiState: "idle",
       pendingSuggestion: null,
       acceptedFingerprint: "",
-      originalAddress: null
+      originalAddress: null,
+      userDecided: false
     };
     function isDebug() {
       try {
@@ -189,15 +190,6 @@
       }
       console.log(`%c[AddrVal]%c ${message}`, style, "");
     }
-    function logWarn(message, data = null) {
-      if (!isDebug()) return;
-      const style = "background:#f57c00;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
-      if (data != null) {
-        console.warn(`%c[AddrVal]%c ${message}`, style, "", data);
-        return;
-      }
-      console.warn(`%c[AddrVal]%c ${message}`, style, "");
-    }
     function logError(message, error) {
       const style = "background:#c62828;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold;";
       console.error(`%c[AddrVal]%c ${message}`, style, "", error);
@@ -213,9 +205,7 @@
         useSuggested: "Gebruik dit adres",
         useOriginal: "Gebruik mijn adres toch",
         editAddress: "Adres aanpassen",
-        continueBlocked: "Controleer eerst het adres voordat je doorgaat.",
-        suggestedAddress: "Voorgesteld adres",
-        continueLabel: "Doorgaan"
+        suggestedAddress: "Voorgesteld adres"
       },
       en: {
         validatingTitle: "Validating address",
@@ -227,9 +217,7 @@
         useSuggested: "Use this address",
         useOriginal: "Use my address anyway",
         editAddress: "Edit address",
-        continueBlocked: "Please resolve the address before continuing.",
-        suggestedAddress: "Suggested address",
-        continueLabel: "Continue"
+        suggestedAddress: "Suggested address"
       },
       de: {
         validatingTitle: "Adresse wird geprueft",
@@ -241,9 +229,7 @@
         useSuggested: "Diese Adresse verwenden",
         useOriginal: "Meine Adresse trotzdem verwenden",
         editAddress: "Adresse bearbeiten",
-        continueBlocked: "Bitte loese zuerst das Adressproblem.",
-        suggestedAddress: "Vorgeschlagene Adresse",
-        continueLabel: "Weiter"
+        suggestedAddress: "Vorgeschlagene Adresse"
       }
     };
     function getStorefrontLang() {
@@ -340,11 +326,6 @@
     function isAddressComplete(address) {
       return Boolean(
         normalizeWhitespace(address.street) && normalizeWhitespace(address.city) && normalizeWhitespace(address.postalCode) && normalizeWhitespace(address.countryName)
-      );
-    }
-    function getContinueButton() {
-      return document.querySelector(
-        ".ec-form__row--continue .form-control__button, .ec-form__row--continue button"
       );
     }
     function getContinueRow() {
@@ -627,41 +608,29 @@
         (_a = getFormControl(field)) == null ? void 0 : _a.classList.toggle("pm-addr-valid", valid);
       });
     }
-    function setContinueEnabled(enabled) {
-      const button = getContinueButton();
-      if (!button) return;
-      button.disabled = !enabled;
-      button.setAttribute("aria-disabled", String(!enabled));
-      button.style.opacity = enabled ? "" : "0.65";
-      button.style.cursor = enabled ? "" : "not-allowed";
-    }
     function setUiState(nextState) {
       state.uiState = nextState;
       if (nextState === "idle") {
         setFieldDisabled(false);
         setFieldValid(false);
-        setContinueEnabled(false);
         renderIdle();
         return;
       }
       if (nextState === "validating") {
         setFieldDisabled(true);
         setFieldValid(false);
-        setContinueEnabled(false);
         renderValidating();
         return;
       }
       if (nextState === "warning") {
         setFieldDisabled(false);
         setFieldValid(false);
-        setContinueEnabled(false);
         renderWarning(state.originalAddress, state.pendingSuggestion);
         return;
       }
       if (nextState === "valid") {
         setFieldDisabled(false);
         setFieldValid(true);
-        setContinueEnabled(true);
         renderSuccess();
       }
     }
@@ -810,7 +779,9 @@
     }
     function scheduleValidation() {
       if (!state.onCheckoutAddressPage) return;
+      if (state.userDecided) return;
       clearTimeout(state.debounceTimer);
+      state.acceptedFingerprint = "";
       state.pendingSuggestion = null;
       setUiState("idle");
       state.debounceTimer = setTimeout(() => {
@@ -821,11 +792,13 @@
     }
     function onDocumentInput(event) {
       if (!state.onCheckoutAddressPage) return;
+      if (!event.isTrusted) return;
       if (!(event.target instanceof Element)) return;
       const watched = Object.values(FIELD_SELECTORS).some(
         (selectors) => selectors.some((selector) => event.target.matches(selector))
       );
       if (!watched) return;
+      state.userDecided = false;
       scheduleValidation();
     }
     function onDocumentChange(event) {
@@ -837,6 +810,7 @@
       if (!action) return;
       const actionName = action.getAttribute("data-pm-addr-action");
       if (actionName === "use-suggested" && state.pendingSuggestion) {
+        state.userDecided = true;
         applySuggestionToDom(state.pendingSuggestion);
         state.acceptedFingerprint = fingerprintAddress(
           normalizeAddress({
@@ -849,40 +823,19 @@
         return;
       }
       if (actionName === "use-original" && state.originalAddress) {
+        state.userDecided = true;
         state.acceptedFingerprint = fingerprintAddress(state.originalAddress);
         state.pendingSuggestion = null;
         setUiState("valid");
         return;
       }
       if (actionName === "edit") {
+        state.userDecided = true;
         state.acceptedFingerprint = "";
         state.pendingSuggestion = null;
         setUiState("idle");
         (_c = getFields().street) == null ? void 0 : _c.focus();
       }
-    }
-    function onContinueClickCapture(event) {
-      if (!state.onCheckoutAddressPage) return;
-      if (!(event.target instanceof Element)) return;
-      const button = event.target.closest(
-        ".ec-form__row--continue .form-control__button, .ec-form__row--continue button"
-      );
-      if (!button) return;
-      if (state.uiState === "valid") return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (typeof event.stopImmediatePropagation === "function") {
-        event.stopImmediatePropagation();
-      }
-      const box = ensureInlineBox();
-      if (box && !box.innerHTML) {
-        scheduleValidation();
-      } else if (state.uiState === "idle") {
-        runValidationNow().catch((error) => {
-          logError("Continue-click validation failed", error);
-        });
-      }
-      logWarn(t("continueBlocked"), { uiState: state.uiState });
     }
     function onPageLoaded(page) {
       log("Ecwid page loaded", { type: page == null ? void 0 : page.type });
@@ -893,6 +846,7 @@
         state.acceptedFingerprint = "";
         state.pendingSuggestion = null;
         state.originalAddress = null;
+        state.userDecided = false;
         setUiState("idle");
         return;
       }
@@ -909,7 +863,7 @@
         setUiState("valid");
         return;
       }
-      if (currentAddress && isAddressComplete(currentAddress)) {
+      if (!state.userDecided && currentAddress && isAddressComplete(currentAddress)) {
         clearTimeout(state.debounceTimer);
         state.debounceTimer = setTimeout(() => {
           runValidationNow().catch((error) => {
@@ -923,7 +877,6 @@
       document.addEventListener("input", onDocumentInput, true);
       document.addEventListener("change", onDocumentChange, true);
       document.addEventListener("click", onInlineActionClick, true);
-      document.addEventListener("click", onContinueClickCapture, true);
       state.listenersAttached = true;
       log("Checkout address listeners attached");
     }

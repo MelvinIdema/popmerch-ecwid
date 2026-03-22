@@ -27,6 +27,7 @@ export function initAddressValidation(config = {}) {
     pendingSuggestion: null,
     acceptedFingerprint: "",
     originalAddress: null,
+    userDecided: false,
   };
 
   function isDebug() {
@@ -88,9 +89,7 @@ export function initAddressValidation(config = {}) {
       useSuggested: "Gebruik dit adres",
       useOriginal: "Gebruik mijn adres toch",
       editAddress: "Adres aanpassen",
-      continueBlocked: "Controleer eerst het adres voordat je doorgaat.",
       suggestedAddress: "Voorgesteld adres",
-      continueLabel: "Doorgaan",
     },
     en: {
       validatingTitle: "Validating address",
@@ -105,9 +104,7 @@ export function initAddressValidation(config = {}) {
       useSuggested: "Use this address",
       useOriginal: "Use my address anyway",
       editAddress: "Edit address",
-      continueBlocked: "Please resolve the address before continuing.",
       suggestedAddress: "Suggested address",
-      continueLabel: "Continue",
     },
     de: {
       validatingTitle: "Adresse wird geprueft",
@@ -122,9 +119,7 @@ export function initAddressValidation(config = {}) {
       useSuggested: "Diese Adresse verwenden",
       useOriginal: "Meine Adresse trotzdem verwenden",
       editAddress: "Adresse bearbeiten",
-      continueBlocked: "Bitte loese zuerst das Adressproblem.",
       suggestedAddress: "Vorgeschlagene Adresse",
-      continueLabel: "Weiter",
     },
   };
 
@@ -246,12 +241,6 @@ export function initAddressValidation(config = {}) {
         normalizeWhitespace(address.city) &&
         normalizeWhitespace(address.postalCode) &&
         normalizeWhitespace(address.countryName)
-    );
-  }
-
-  function getContinueButton() {
-    return document.querySelector(
-      ".ec-form__row--continue .form-control__button, .ec-form__row--continue button"
     );
   }
 
@@ -565,22 +554,12 @@ export function initAddressValidation(config = {}) {
     });
   }
 
-  function setContinueEnabled(enabled) {
-    const button = getContinueButton();
-    if (!button) return;
-    button.disabled = !enabled;
-    button.setAttribute("aria-disabled", String(!enabled));
-    button.style.opacity = enabled ? "" : "0.65";
-    button.style.cursor = enabled ? "" : "not-allowed";
-  }
-
   function setUiState(nextState) {
     state.uiState = nextState;
 
     if (nextState === "idle") {
       setFieldDisabled(false);
       setFieldValid(false);
-      setContinueEnabled(false);
       renderIdle();
       return;
     }
@@ -588,7 +567,6 @@ export function initAddressValidation(config = {}) {
     if (nextState === "validating") {
       setFieldDisabled(true);
       setFieldValid(false);
-      setContinueEnabled(false);
       renderValidating();
       return;
     }
@@ -596,7 +574,6 @@ export function initAddressValidation(config = {}) {
     if (nextState === "warning") {
       setFieldDisabled(false);
       setFieldValid(false);
-      setContinueEnabled(false);
       renderWarning(state.originalAddress, state.pendingSuggestion);
       return;
     }
@@ -604,7 +581,6 @@ export function initAddressValidation(config = {}) {
     if (nextState === "valid") {
       setFieldDisabled(false);
       setFieldValid(true);
-      setContinueEnabled(true);
       renderSuccess();
     }
   }
@@ -806,11 +782,9 @@ export function initAddressValidation(config = {}) {
 
   function scheduleValidation() {
     if (!state.onCheckoutAddressPage) return;
+    if (state.userDecided) return;
     clearTimeout(state.debounceTimer);
-    // Do NOT clear acceptedFingerprint here — applySuggestionToDom fires input/change
-    // events synchronously, so clearing it here causes the debounce to re-validate an
-    // address that was just accepted. runValidationNow compares fingerprints and skips
-    // the API call when the address hasn't actually changed.
+    state.acceptedFingerprint = "";
     state.pendingSuggestion = null;
     setUiState("idle");
     state.debounceTimer = setTimeout(() => {
@@ -822,12 +796,16 @@ export function initAddressValidation(config = {}) {
 
   function onDocumentInput(event) {
     if (!state.onCheckoutAddressPage) return;
+    // Ignore events dispatched programmatically (e.g. by applySuggestionToDom).
+    // Only real user interactions (isTrusted) should trigger re-validation.
+    if (!event.isTrusted) return;
     if (!(event.target instanceof Element)) return;
     const watched = Object.values(FIELD_SELECTORS).some((selectors) =>
       selectors.some((selector) => event.target.matches(selector))
     );
     if (!watched) return;
 
+    state.userDecided = false;
     scheduleValidation();
   }
 
@@ -841,6 +819,7 @@ export function initAddressValidation(config = {}) {
 
     const actionName = action.getAttribute("data-pm-addr-action");
     if (actionName === "use-suggested" && state.pendingSuggestion) {
+      state.userDecided = true;
       applySuggestionToDom(state.pendingSuggestion);
       state.acceptedFingerprint = fingerprintAddress(
         normalizeAddress({
@@ -854,6 +833,7 @@ export function initAddressValidation(config = {}) {
     }
 
     if (actionName === "use-original" && state.originalAddress) {
+      state.userDecided = true;
       state.acceptedFingerprint = fingerprintAddress(state.originalAddress);
       state.pendingSuggestion = null;
       setUiState("valid");
@@ -861,6 +841,7 @@ export function initAddressValidation(config = {}) {
     }
 
     if (actionName === "edit") {
+      state.userDecided = true;
       state.acceptedFingerprint = "";
       state.pendingSuggestion = null;
       setUiState("idle");
@@ -868,33 +849,6 @@ export function initAddressValidation(config = {}) {
     }
   }
 
-  function onContinueClickCapture(event) {
-    if (!state.onCheckoutAddressPage) return;
-    if (!(event.target instanceof Element)) return;
-    const button = event.target.closest(
-      ".ec-form__row--continue .form-control__button, .ec-form__row--continue button"
-    );
-    if (!button) return;
-
-    if (state.uiState === "valid") return;
-
-    event.preventDefault();
-    event.stopPropagation();
-    if (typeof event.stopImmediatePropagation === "function") {
-      event.stopImmediatePropagation();
-    }
-
-    const box = ensureInlineBox();
-    if (box && !box.innerHTML) {
-      scheduleValidation();
-    } else if (state.uiState === "idle") {
-      runValidationNow().catch((error) => {
-        logError("Continue-click validation failed", error);
-      });
-    }
-
-    logWarn(t("continueBlocked"), { uiState: state.uiState });
-  }
 
   function onPageLoaded(page) {
     log("Ecwid page loaded", { type: page?.type });
@@ -909,6 +863,7 @@ export function initAddressValidation(config = {}) {
       state.acceptedFingerprint = "";
       state.pendingSuggestion = null;
       state.originalAddress = null;
+      state.userDecided = false;
       setUiState("idle");
       return;
     }
@@ -938,7 +893,7 @@ export function initAddressValidation(config = {}) {
       return;
     }
 
-    if (currentAddress && isAddressComplete(currentAddress)) {
+    if (!state.userDecided && currentAddress && isAddressComplete(currentAddress)) {
       clearTimeout(state.debounceTimer);
       state.debounceTimer = setTimeout(() => {
         runValidationNow().catch((error) => {
@@ -954,7 +909,6 @@ export function initAddressValidation(config = {}) {
     document.addEventListener("input", onDocumentInput, true);
     document.addEventListener("change", onDocumentChange, true);
     document.addEventListener("click", onInlineActionClick, true);
-    document.addEventListener("click", onContinueClickCapture, true);
     state.listenersAttached = true;
     log("Checkout address listeners attached");
   }
