@@ -151,7 +151,7 @@
       apiKey: config.apiKey || "",
       pollInterval: 50,
       pollTimeout: 1e4,
-      debounceMs: 500,
+      debounceMs: 1500,
       confidenceWarning: 0.4,
       confidenceClean: 0.75
     };
@@ -204,7 +204,6 @@
         successBody: "Dit adres is gecontroleerd. Je kunt doorgaan naar de verzendmethodes.",
         useSuggested: "Gebruik dit adres",
         useOriginal: "Gebruik mijn adres toch",
-        editAddress: "Adres aanpassen",
         suggestedAddress: "Voorgesteld adres"
       },
       en: {
@@ -216,7 +215,6 @@
         successBody: "This address has been checked. You can continue to shipping methods.",
         useSuggested: "Use this address",
         useOriginal: "Use my address anyway",
-        editAddress: "Edit address",
         suggestedAddress: "Suggested address"
       },
       de: {
@@ -228,7 +226,6 @@
         successBody: "Diese Adresse wurde geprueft. Du kannst mit den Versandarten fortfahren.",
         useSuggested: "Diese Adresse verwenden",
         useOriginal: "Meine Adresse trotzdem verwenden",
-        editAddress: "Adresse bearbeiten",
         suggestedAddress: "Vorgeschlagene Adresse"
       }
     };
@@ -535,11 +532,6 @@
       )}" data-pm-addr-action="use-original">${escapeHtml(
         t("useOriginal")
       )}</button>
-          <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" style="${getInlineButtonStyle(
-        "ghost"
-      )}" data-pm-addr-action="edit">${escapeHtml(
-        t("editAddress")
-      )}</button>
         </div>
       </div>
     `;
@@ -742,15 +734,13 @@
           suggestion
         });
         if (confidence >= CONFIG.confidenceClean) {
-          const acceptedAddress = hasSuggestion ? normalizeAddress({
-            ...normalizedAddress,
-            ...suggestion
-          }) : normalizedAddress;
           if (hasSuggestion) {
-            applySuggestionToDom(acceptedAddress);
+            state.pendingSuggestion = suggestion;
+            setUiState("warning");
+            return false;
           }
-          state.originalAddress = acceptedAddress;
-          state.acceptedFingerprint = fingerprintAddress(acceptedAddress);
+          state.originalAddress = normalizedAddress;
+          state.acceptedFingerprint = fingerprintAddress(normalizedAddress);
           state.pendingSuggestion = null;
           setUiState("valid");
           return true;
@@ -805,7 +795,7 @@
       onDocumentInput(event);
     }
     function onInlineActionClick(event) {
-      var _a, _b, _c;
+      var _a, _b;
       const action = (_b = (_a = event.target) == null ? void 0 : _a.closest) == null ? void 0 : _b.call(_a, "[data-pm-addr-action]");
       if (!action) return;
       const actionName = action.getAttribute("data-pm-addr-action");
@@ -829,13 +819,6 @@
         setUiState("valid");
         return;
       }
-      if (actionName === "edit") {
-        state.userDecided = true;
-        state.acceptedFingerprint = "";
-        state.pendingSuggestion = null;
-        setUiState("idle");
-        (_c = getFields().street) == null ? void 0 : _c.focus();
-      }
     }
     function onPageLoaded(page) {
       log("Ecwid page loaded", { type: page == null ? void 0 : page.type });
@@ -856,6 +839,7 @@
       state.acceptedFingerprint = "";
       state.pendingSuggestion = null;
       state.originalAddress = null;
+      state.userDecided = false;
       setUiState("idle");
       const currentAddress = readAddressFromDom();
       if (previousFingerprint && currentAddress && isAddressComplete(currentAddress) && fingerprintAddress(normalizeAddress(currentAddress)) === previousFingerprint) {

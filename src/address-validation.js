@@ -13,7 +13,7 @@ export function initAddressValidation(config = {}) {
     apiKey: config.apiKey || "",
     pollInterval: 50,
     pollTimeout: 10_000,
-    debounceMs: 500,
+    debounceMs: 1500,
     confidenceWarning: 0.4,
     confidenceClean: 0.75,
   };
@@ -88,7 +88,6 @@ export function initAddressValidation(config = {}) {
         "Dit adres is gecontroleerd. Je kunt doorgaan naar de verzendmethodes.",
       useSuggested: "Gebruik dit adres",
       useOriginal: "Gebruik mijn adres toch",
-      editAddress: "Adres aanpassen",
       suggestedAddress: "Voorgesteld adres",
     },
     en: {
@@ -103,7 +102,6 @@ export function initAddressValidation(config = {}) {
         "This address has been checked. You can continue to shipping methods.",
       useSuggested: "Use this address",
       useOriginal: "Use my address anyway",
-      editAddress: "Edit address",
       suggestedAddress: "Suggested address",
     },
     de: {
@@ -118,7 +116,6 @@ export function initAddressValidation(config = {}) {
         "Diese Adresse wurde geprueft. Du kannst mit den Versandarten fortfahren.",
       useSuggested: "Diese Adresse verwenden",
       useOriginal: "Meine Adresse trotzdem verwenden",
-      editAddress: "Adresse bearbeiten",
       suggestedAddress: "Vorgeschlagene Adresse",
     },
   };
@@ -470,11 +467,6 @@ export function initAddressValidation(config = {}) {
           )}" data-pm-addr-action="use-original">${escapeHtml(
             t("useOriginal")
           )}</button>
-          <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" style="${getInlineButtonStyle(
-            "ghost"
-          )}" data-pm-addr-action="edit">${escapeHtml(
-            t("editAddress")
-          )}</button>
         </div>
       </div>
     `;
@@ -737,19 +729,14 @@ export function initAddressValidation(config = {}) {
       });
 
       if (confidence >= CONFIG.confidenceClean) {
-        const acceptedAddress = hasSuggestion
-          ? normalizeAddress({
-              ...normalizedAddress,
-              ...suggestion,
-            })
-          : normalizedAddress;
-
         if (hasSuggestion) {
-          applySuggestionToDom(acceptedAddress);
+          state.pendingSuggestion = suggestion;
+          setUiState("warning");
+          return false;
         }
 
-        state.originalAddress = acceptedAddress;
-        state.acceptedFingerprint = fingerprintAddress(acceptedAddress);
+        state.originalAddress = normalizedAddress;
+        state.acceptedFingerprint = fingerprintAddress(normalizedAddress);
         state.pendingSuggestion = null;
         setUiState("valid");
         return true;
@@ -840,15 +827,7 @@ export function initAddressValidation(config = {}) {
       return;
     }
 
-    if (actionName === "edit") {
-      state.userDecided = true;
-      state.acceptedFingerprint = "";
-      state.pendingSuggestion = null;
-      setUiState("idle");
-      getFields().street?.focus();
-    }
   }
-
 
   function onPageLoaded(page) {
     log("Ecwid page loaded", { type: page?.type });
@@ -875,6 +854,7 @@ export function initAddressValidation(config = {}) {
     state.acceptedFingerprint = "";
     state.pendingSuggestion = null;
     state.originalAddress = null;
+    state.userDecided = false;
     setUiState("idle");
 
     const currentAddress = readAddressFromDom();
