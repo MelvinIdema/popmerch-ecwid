@@ -15,7 +15,7 @@ export function initAddressValidation(config = {}) {
     pollTimeout: 10_000,
     debounceMs: 1500,
     confidenceWarning: 0.4,
-    confidenceClean: 0.75,
+    confidenceClean: 0.66,
   };
 
   const state = {
@@ -729,12 +729,6 @@ export function initAddressValidation(config = {}) {
       });
 
       if (confidence >= CONFIG.confidenceClean) {
-        if (hasSuggestion) {
-          state.pendingSuggestion = suggestion;
-          setUiState("warning");
-          return false;
-        }
-
         state.originalAddress = normalizedAddress;
         state.acceptedFingerprint = fingerprintAddress(normalizedAddress);
         state.pendingSuggestion = null;
