@@ -153,7 +153,7 @@
       pollTimeout: 1e4,
       debounceMs: 1500,
       confidenceWarning: 0.4,
-      confidenceClean: 0.66
+      confidenceClean: 0.85
     };
     const state = {
       onCheckoutAddressPage: false,

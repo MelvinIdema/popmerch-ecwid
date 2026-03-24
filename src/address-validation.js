@@ -1,12 +1,12 @@
 export function initAddressValidation(config = {}) {
   const FIELD_SELECTORS = {
-    country: ['#ec-country', 'select[name="country-list"]'],
-    fullName: ['#ec-full-name', 'input[name="name"]'],
-    phone: ['#ec-phone', 'input[name="phone"]'],
-    company: ['#ec-organization-name', 'input[name="organization"]'],
-    street: ['#ec-address-line1', 'input[name="address-line1"]'],
-    city: ['#ec-city-list', 'input[name="city"]'],
-    postalCode: ['#ec-postal-code', 'input[name="zip"]'],
+    country: ["#ec-country", 'select[name="country-list"]'],
+    fullName: ["#ec-full-name", 'input[name="name"]'],
+    phone: ["#ec-phone", 'input[name="phone"]'],
+    company: ["#ec-organization-name", 'input[name="organization"]'],
+    street: ["#ec-address-line1", 'input[name="address-line1"]'],
+    city: ["#ec-city-list", 'input[name="city"]'],
+    postalCode: ["#ec-postal-code", 'input[name="zip"]'],
   };
 
   const CONFIG = {
@@ -15,7 +15,7 @@ export function initAddressValidation(config = {}) {
     pollTimeout: 10_000,
     debounceMs: 1500,
     confidenceWarning: 0.4,
-    confidenceClean: 0.66,
+    confidenceClean: 0.85,
   };
 
   const state = {
@@ -235,9 +235,9 @@ export function initAddressValidation(config = {}) {
   function isAddressComplete(address) {
     return Boolean(
       normalizeWhitespace(address.street) &&
-        normalizeWhitespace(address.city) &&
-        normalizeWhitespace(address.postalCode) &&
-        normalizeWhitespace(address.countryName)
+      normalizeWhitespace(address.city) &&
+      normalizeWhitespace(address.postalCode) &&
+      normalizeWhitespace(address.countryName),
     );
   }
 
@@ -421,7 +421,7 @@ export function initAddressValidation(config = {}) {
     box.innerHTML = `
       <div class="pm-addr-card pm-addr-card--loading">
         <div class="pm-addr-card__title"><span class="pm-addr-spinner"></span>${escapeHtml(
-          t("validatingTitle")
+          t("validatingTitle"),
         )}</div>
         <p class="pm-addr-card__body">${escapeHtml(t("validatingBody"))}</p>
       </div>
@@ -436,7 +436,7 @@ export function initAddressValidation(config = {}) {
       ? `
         <div class="pm-addr-card__suggestion">
           <div class="pm-addr-card__suggestion-label">${escapeHtml(
-            t("suggestedAddress")
+            t("suggestedAddress"),
           )}</div>
           <p class="pm-addr-card__suggestion-lines">
             ${escapeHtml(suggestion.street)}<br>
@@ -456,16 +456,16 @@ export function initAddressValidation(config = {}) {
           ${
             suggestion
               ? `<button type="button" class="pm-addr-card__button pm-addr-card__button--primary" style="${getInlineButtonStyle(
-                  "primary"
+                  "primary",
                 )}" data-pm-addr-action="use-suggested">${escapeHtml(
-                  t("useSuggested")
+                  t("useSuggested"),
                 )}</button>`
               : ""
           }
           <button type="button" class="pm-addr-card__button pm-addr-card__button--ghost" style="${getInlineButtonStyle(
-            "ghost"
+            "ghost",
           )}" data-pm-addr-action="use-original">${escapeHtml(
-            t("useOriginal")
+            t("useOriginal"),
           )}</button>
         </div>
       </div>
@@ -674,7 +674,7 @@ export function initAddressValidation(config = {}) {
     });
 
     const response = await fetch(
-      `https://api.geoapify.com/v1/geocode/search?${params}`
+      `https://api.geoapify.com/v1/geocode/search?${params}`,
     );
 
     if (!response.ok) {
@@ -697,7 +697,10 @@ export function initAddressValidation(config = {}) {
     const normalizedAddress = normalizeAddress(rawAddress);
     const fingerprint = fingerprintAddress(normalizedAddress);
 
-    if (state.acceptedFingerprint && state.acceptedFingerprint === fingerprint) {
+    if (
+      state.acceptedFingerprint &&
+      state.acceptedFingerprint === fingerprint
+    ) {
       setUiState("valid");
       return true;
     }
@@ -782,7 +785,7 @@ export function initAddressValidation(config = {}) {
     if (!event.isTrusted) return;
     if (!(event.target instanceof Element)) return;
     const watched = Object.values(FIELD_SELECTORS).some((selectors) =>
-      selectors.some((selector) => event.target.matches(selector))
+      selectors.some((selector) => event.target.matches(selector)),
     );
     if (!watched) return;
 
@@ -806,7 +809,7 @@ export function initAddressValidation(config = {}) {
         normalizeAddress({
           ...state.originalAddress,
           ...state.pendingSuggestion,
-        })
+        }),
       );
       state.pendingSuggestion = null;
       setUiState("valid");
@@ -820,7 +823,6 @@ export function initAddressValidation(config = {}) {
       setUiState("valid");
       return;
     }
-
   }
 
   function onPageLoaded(page) {
@@ -860,14 +862,19 @@ export function initAddressValidation(config = {}) {
       previousFingerprint &&
       currentAddress &&
       isAddressComplete(currentAddress) &&
-      fingerprintAddress(normalizeAddress(currentAddress)) === previousFingerprint
+      fingerprintAddress(normalizeAddress(currentAddress)) ===
+        previousFingerprint
     ) {
       state.acceptedFingerprint = previousFingerprint;
       setUiState("valid");
       return;
     }
 
-    if (!state.userDecided && currentAddress && isAddressComplete(currentAddress)) {
+    if (
+      !state.userDecided &&
+      currentAddress &&
+      isAddressComplete(currentAddress)
+    ) {
       clearTimeout(state.debounceTimer);
       state.debounceTimer = setTimeout(() => {
         runValidationNow().catch((error) => {
