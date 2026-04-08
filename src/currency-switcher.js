@@ -31,7 +31,14 @@ export function initCurrencySwitcher(config = {}) {
     ".grid-product__price-value",
     ".details-product-price-compare__container s",
     ".details-product-price-tax__value",
+    ".ec-range__limit",
   ].join(",");
+
+  // Class added to our proxy inputs so they can be identified for teardown.
+  const PROXY_CLASS = "pm-price-proxy";
+
+  // Prototype value descriptor used when patching / restoring real input setters.
+  const INPUT_VALUE_DESCRIPTOR = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
 
   // Selectors for elements that mix prose text with embedded price(s).
   // The original text is stored in `data-pm-original-text` and prices within are
@@ -274,6 +281,14 @@ export function initCurrencySwitcher(config = {}) {
               }
             );
           }
+
+          // Price filter inputs — mount proxy if the filter just appeared in the DOM.
+          if (
+            node.matches(".ec-filter__price-from, .ec-filter__price-to") ||
+            node.querySelector(".ec-filter__price-from, .ec-filter__price-to")
+          ) {
+            mountPriceFilterProxy();
+          }
         }
       }
     });
@@ -394,6 +409,8 @@ export function initCurrencySwitcher(config = {}) {
       select.addEventListener("change", () => {
         saveSelectedCurrency(select.value);
         if (cachedRates) convertAllPrices(select.value, cachedRates);
+        teardownPriceFilterProxy();
+        mountPriceFilterProxy();
         log(`Currency changed to ${select.value}`);
       });
 
@@ -426,6 +443,111 @@ export function initCurrencySwitcher(config = {}) {
     }, POLL_INTERVAL);
   }
 
+  // ─── Price filter proxy ───────────────────────────────────────────────────
+  //
+  // Ecwid's price filter only works in EUR. To let users type in their chosen
+  // currency we:
+  //   1. Hide the real Ecwid inputs (they stay in the DOM, Ecwid reads them in EUR).
+  //   2. Insert visible proxy inputs that display / accept values in the selected currency.
+  //   3. Proxy → real: on user input, divide by rate and write to real input, then
+  //      fire input + change events so Ecwid picks up the update.
+  //   4. Real → proxy: intercept programmatic `.value` sets (slider drag) and mirror
+  //      the converted value to the proxy.
+  //   5. On currency change or teardown: remove proxies, restore real inputs.
+
+  function teardownPriceFilterProxy() {
+    document.querySelectorAll(`.${PROXY_CLASS}`).forEach(proxy => proxy.remove());
+    document.querySelectorAll(".ec-filter__price-from input, .ec-filter__price-to input").forEach(input => {
+      input.style.display = "";
+      // Remove the instance-level value property we patched, restoring prototype behaviour.
+      try { delete input.value; } catch {}
+    });
+  }
+
+  function mountPriceFilterProxy() {
+    if (!cachedRates) return;
+
+    const currency = getSelectedCurrency();
+
+    // If EUR is selected the proxy is unnecessary — real inputs already use EUR.
+    if (currency === BASE_CURRENCY) {
+      teardownPriceFilterProxy();
+      return;
+    }
+
+    const rate = cachedRates[currency];
+    if (rate == null) return;
+
+    const fromWrapper = document.querySelector(".ec-filter__price-from");
+    const toWrapper   = document.querySelector(".ec-filter__price-to");
+    if (!fromWrapper || !toWrapper) return;
+    if (fromWrapper.querySelector(`.${PROXY_CLASS}`)) return; // already mounted
+
+    const fromInput = fromWrapper.querySelector("input");
+    const toInput   = toWrapper.querySelector("input");
+    if (!fromInput || !toInput) return;
+
+    function eurToDisplay(v) {
+      const n = parseFloat(v);
+      if (isNaN(n) || n <= 0) return "";
+      return String(Math.round(n * rate * 100) / 100);
+    }
+
+    function displayToEur(v) {
+      const n = parseFloat(v);
+      if (isNaN(n) || n <= 0) return "";
+      return String(Math.round((n / rate) * 100) / 100);
+    }
+
+    function createProxy(realInput) {
+      const proxy = document.createElement("input");
+      proxy.className = realInput.className + ` ${PROXY_CLASS}`;
+      proxy.type = "number";
+      proxy.setAttribute("aria-label", realInput.getAttribute("aria-label") ?? "");
+      proxy.autocomplete = "off";
+      // Hide the real input — keep it in the DOM so Ecwid can submit its EUR value.
+      realInput.style.display = "none";
+      realInput.parentNode.insertBefore(proxy, realInput);
+      return proxy;
+    }
+
+    const fromProxy = createProxy(fromInput);
+    const toProxy   = createProxy(toInput);
+
+    // Intercept slider / programmatic updates to real inputs → mirror to proxy.
+    function patchValueSetter(realInput, proxyInput) {
+      Object.defineProperty(realInput, "value", {
+        configurable: true,
+        set(v) {
+          INPUT_VALUE_DESCRIPTOR.set.call(this, v);
+          proxyInput.value = eurToDisplay(v);
+        },
+        get() {
+          return INPUT_VALUE_DESCRIPTOR.get.call(this);
+        },
+      });
+    }
+
+    patchValueSetter(fromInput, fromProxy);
+    patchValueSetter(toInput,   toProxy);
+
+    // User types in proxy → convert to EUR → write to real input → notify Ecwid.
+    function syncProxyToReal(proxyInput, realInput) {
+      INPUT_VALUE_DESCRIPTOR.set.call(realInput, displayToEur(proxyInput.value));
+      realInput.dispatchEvent(new Event("input",  { bubbles: true }));
+      realInput.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    fromProxy.addEventListener("input", () => syncProxyToReal(fromProxy, fromInput));
+    toProxy.addEventListener("input",   () => syncProxyToReal(toProxy,   toInput));
+
+    // Populate proxy with any value the real input already has.
+    if (fromInput.value) fromProxy.value = eurToDisplay(fromInput.value);
+    if (toInput.value)   toProxy.value   = eurToDisplay(toInput.value);
+
+    log("Price filter proxy mounted");
+  }
+
   // ─── Boot ─────────────────────────────────────────────────────────────────
 
   mountBarSwitcher();
@@ -435,12 +557,16 @@ export function initCurrencySwitcher(config = {}) {
     if (!rates) return;
     cachedRates = rates;
     convertAllPrices(getSelectedCurrency(), rates);
+    mountPriceFilterProxy();
   });
 
   window.Ecwid?.OnPageLoaded?.add((page) => {
     log("OnPageLoaded", page.type);
     if (cachedRates) {
-      setTimeout(() => convertAllPrices(getSelectedCurrency(), cachedRates), 150);
+      setTimeout(() => {
+        convertAllPrices(getSelectedCurrency(), cachedRates);
+        mountPriceFilterProxy();
+      }, 150);
     }
   });
 

@@ -5,6 +5,9 @@ export function initCatalogusSearchExtractor() {
   // Covers both the main apply button and the mobile sticky-bar variant
   const APPLY_BTN_SELECTOR =
     ".filter-section-button-container .form-control__button, .filter-section-sticky-bar .form-control__button";
+  const FILTER_TOGGLE_SELECTOR = ".grid-sort__item--filter";
+  const FILTER_POPUP_SELECTOR = ".ec-filters--popup";
+  const GHOST_STYLE_ID = "pm-search-ghost-style";
   const STYLES_ID = "popmerch-search-proxy-styles";
   const PROXY_ID = "pm-search-proxy";
   const BUTTONS_WRAPPER_CLASS = "pm-sort-buttons";
@@ -25,33 +28,97 @@ export function initCatalogusSearchExtractor() {
 
   // ─── Search trigger ──────────────────────────────────────────────────────────
 
-  // The filter popup (.ec-filters--popup) is always mounted in the DOM — on mobile it
-  // is just visually hidden via CSS classes. Programmatic .click() fires on hidden
-  // elements just fine, so we use the exact same path on every viewport: set the real
-  // input value (triggering Vue's reactivity), then click the hidden apply button.
-  // No drawer flash, no async dance.
-  function triggerSearch(value) {
-    const realInput = findRealInput();
-    if (!realInput) {
-      console.warn("[Popmerch] proxy search: real filter input not found in DOM");
-      return;
-    }
+  // Resolves with the first matching HTMLInputElement once it appears in the DOM.
+  function waitForRealInput(timeoutMs = 2000) {
+    return new Promise((resolve, reject) => {
+      // Already there? (desktop sidebar case)
+      const existing = findRealInput();
+      if (existing) return resolve(existing);
 
-    // Update the real input — use the native setter so Vue's v-model picks it up
+      const timer = setTimeout(() => {
+        observer.disconnect();
+        reject(new Error("timeout waiting for filter input"));
+      }, timeoutMs);
+
+      const observer = new MutationObserver(() => {
+        const el = findRealInput();
+        if (el) {
+          clearTimeout(timer);
+          observer.disconnect();
+          resolve(el);
+        }
+      });
+
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  }
+
+  // Clamp the filter popup to invisible + no transitions so we can open/apply
+  // programmatically without the user seeing any drawer flash.
+  function ghostOn() {
+    if (document.getElementById(GHOST_STYLE_ID)) return;
+    const s = document.createElement("style");
+    s.id = GHOST_STYLE_ID;
+    s.textContent = `
+      ${FILTER_POPUP_SELECTOR} {
+        opacity: 0 !important;
+        pointer-events: none !important;
+        transition: none !important;
+        animation: none !important;
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  function ghostOff() {
+    document.getElementById(GHOST_STYLE_ID)?.remove();
+  }
+
+  function applyValue(realInput, value) {
     setNativeValue(realInput, value);
     realInput.dispatchEvent(new Event("input", { bubbles: true }));
     realInput.dispatchEvent(new Event("change", { bubbles: true }));
 
-    // Click apply — works on hidden elements; no popup open/close needed
     const applyBtn = document.querySelector(APPLY_BTN_SELECTOR);
     if (applyBtn) {
-      applyBtn.click();
+      applyBtn.click(); // works on hidden elements; Ecwid closes the popup itself
     } else {
-      console.warn("[Popmerch] proxy search: apply button not found, falling back to Enter");
       realInput.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true })
       );
     }
+  }
+
+  function triggerSearch(value) {
+    const realInput = findRealInput();
+
+    if (realInput) {
+      // Input already in the DOM (desktop sidebar is always rendered)
+      applyValue(realInput, value);
+      return;
+    }
+
+    // Mobile v-if: popup content doesn't exist until opened.
+    // Open it invisibly, wait for the input to render, apply, done.
+    const toggle = document.querySelector(FILTER_TOGGLE_SELECTOR);
+    if (!toggle) {
+      console.warn("[Popmerch] proxy search: filter toggle not found");
+      return;
+    }
+
+    ghostOn();
+    toggle.click(); // triggers Ecwid to v-if render the popup content
+
+    waitForRealInput()
+      .then((input) => {
+        applyValue(input, value);
+        // Give Ecwid one frame to process the apply before restoring visibility
+        requestAnimationFrame(ghostOff);
+      })
+      .catch((err) => {
+        console.warn("[Popmerch] proxy search:", err.message);
+        ghostOff();
+      });
   }
 
   // ─── Proxy element ───────────────────────────────────────────────────────────
