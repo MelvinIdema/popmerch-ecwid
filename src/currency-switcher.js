@@ -28,6 +28,8 @@ export function initCurrencySwitcher(config = {}) {
   // The EUR amount will be parsed from their text on first encounter and cached in
   // the element's `data-pm-eur` attribute for subsequent currency switches.
   const DISPLAY_PRICE_SELECTORS = [
+    // Instant site search results
+    ".search-item-price",
     // Category / grid
     ".grid-product__price-value",
     ".ins-tile__product-current-price",
