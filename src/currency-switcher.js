@@ -24,6 +24,22 @@ export function initCurrencySwitcher(config = {}) {
 
   const ZERO_DECIMAL = new Set(["JPY", "HUF"]);
 
+  // Selectors for standalone price elements without a schema.org `content` attribute.
+  // The EUR amount will be parsed from their text on first encounter and cached in
+  // the element's `data-pm-eur` attribute for subsequent currency switches.
+  const DISPLAY_PRICE_SELECTORS = [
+    ".grid-product__price-value",
+    ".details-product-price-compare__container s",
+    ".details-product-price-tax__value",
+  ].join(",");
+
+  // Selectors for elements that mix prose text with embedded price(s).
+  // The original text is stored in `data-pm-original-text` and prices within are
+  // replaced via regex so the surrounding sentence is preserved.
+  const TEXT_PRICE_SELECTORS = [
+    ".ec-text-muted.ec-text-initial-size[store-profile]",
+  ].join(",");
+
   let cachedRates = null;
   let currentBarSelect = null;
 
@@ -98,7 +114,23 @@ export function initCurrencySwitcher(config = {}) {
     }
   }
 
-  // ─── Price conversion ─────────────────────────────────────────────────────
+  // ─── Price parsing ────────────────────────────────────────────────────────
+
+  // Parse a EUR price from a Dutch/European formatted string.
+  // Handles: "€ 19,95", "€19,95", "€ 1.234,56"
+  // Dot = thousands separator, comma = decimal separator.
+  function parseEurAmount(text) {
+    const cleaned = text.replace(/[€$£¥\s\u00a0]/g, "");
+    if (!cleaned || !/\d/.test(cleaned)) return null;
+    // European format: comma is decimal separator, dot is thousands separator
+    const normalised = cleaned.includes(",")
+      ? cleaned.replace(/\./g, "").replace(",", ".")
+      : cleaned.replace(/[^\d.]/g, "");
+    const amount = parseFloat(normalised);
+    return isNaN(amount) || amount <= 0 ? null : amount;
+  }
+
+  // ─── Price formatting ─────────────────────────────────────────────────────
 
   function formatPrice(amount, currency) {
     try {
@@ -125,19 +157,75 @@ export function initCurrencySwitcher(config = {}) {
     else { el.textContent = text; }
   }
 
-  function convertAllPrices(currency, rates) {
+  // ─── Price conversion ─────────────────────────────────────────────────────
+
+  // Schema.org elements: authoritative EUR price lives in the `content` attribute.
+  function convertSchemaPrices(currency, rates) {
+    const rate = rates[currency];
+    if (rate == null) return;
     const els = document.querySelectorAll("[itemprop='price'][content]");
-    log(`Converting ${els.length} price(s) → ${currency}`);
+    log(`Schema: converting ${els.length} price(s) → ${currency}`);
     for (const el of els) {
       const base = parseFloat(el.getAttribute("content"));
       if (!base || base <= 0) continue;
-      const rate = rates[currency];
-      if (rate == null) continue;
       setPriceText(el, formatPrice(base * rate, currency));
     }
   }
 
-  // Convert prices in elements newly added by Ecwid's SPA navigation.
+  // Display-only price elements: parse EUR from text once, cache in data-pm-eur.
+  function convertDisplayPrices(currency, rates) {
+    const rate = rates[currency];
+    if (rate == null) return;
+    const els = document.querySelectorAll(DISPLAY_PRICE_SELECTORS);
+    log(`Display: converting ${els.length} price(s) → ${currency}`);
+    for (const el of els) {
+      if (!el.dataset.pmEur) {
+        const amount = parseEurAmount(el.textContent);
+        if (amount == null) continue;
+        el.dataset.pmEur = String(amount);
+      }
+      const base = parseFloat(el.dataset.pmEur);
+      if (isNaN(base)) continue;
+      setPriceText(el, formatPrice(base * rate, currency));
+    }
+  }
+
+  // Mixed text+price elements: replace all €-prices in a sentence via regex.
+  // Original text is stored in data-pm-original-text on first encounter so that
+  // switching currencies multiple times always converts from the EUR source.
+  function convertTextPrices(currency, rates) {
+    const rate = rates[currency];
+    if (rate == null) return;
+    const els = document.querySelectorAll(TEXT_PRICE_SELECTORS);
+    log(`Text: converting ${els.length} element(s) → ${currency}`);
+    for (const el of els) {
+      if (!el.dataset.pmOriginalText) {
+        el.dataset.pmOriginalText = el.textContent;
+      }
+      if (currency === BASE_CURRENCY) {
+        el.textContent = el.dataset.pmOriginalText;
+        continue;
+      }
+      el.textContent = el.dataset.pmOriginalText.replace(
+        /€\s*([\d.,]+)/g,
+        (_match, priceStr) => {
+          const normalised = priceStr.replace(/\./g, "").replace(",", ".");
+          const amount = parseFloat(normalised);
+          if (isNaN(amount) || amount <= 0) return _match;
+          return formatPrice(amount * rate, currency);
+        }
+      );
+    }
+  }
+
+  function convertAllPrices(currency, rates) {
+    convertSchemaPrices(currency, rates);
+    convertDisplayPrices(currency, rates);
+    convertTextPrices(currency, rates);
+  }
+
+  // ─── MutationObserver for SPA-added price elements ────────────────────────
+
   function watchForNewPrices() {
     const observer = new MutationObserver((mutations) => {
       if (!cachedRates) return;
@@ -149,12 +237,42 @@ export function initCurrencySwitcher(config = {}) {
       for (const { addedNodes } of mutations) {
         for (const node of addedNodes) {
           if (node.nodeType !== Node.ELEMENT_NODE) continue;
-          const candidates = node.matches("[itemprop='price'][content]")
+
+          // Schema.org prices
+          const schemaCandidates = node.matches("[itemprop='price'][content]")
             ? [node]
             : [...node.querySelectorAll("[itemprop='price'][content]")];
-          for (const el of candidates) {
+          for (const el of schemaCandidates) {
             const base = parseFloat(el.getAttribute("content"));
             if (base > 0) setPriceText(el, formatPrice(base * rate, currency));
+          }
+
+          // Display-only prices
+          const displayCandidates = node.matches(DISPLAY_PRICE_SELECTORS)
+            ? [node]
+            : [...node.querySelectorAll(DISPLAY_PRICE_SELECTORS)];
+          for (const el of displayCandidates) {
+            const amount = parseEurAmount(el.textContent);
+            if (amount == null) continue;
+            el.dataset.pmEur = String(amount);
+            setPriceText(el, formatPrice(amount * rate, currency));
+          }
+
+          // Text+price elements
+          const textCandidates = node.matches(TEXT_PRICE_SELECTORS)
+            ? [node]
+            : [...node.querySelectorAll(TEXT_PRICE_SELECTORS)];
+          for (const el of textCandidates) {
+            el.dataset.pmOriginalText = el.textContent;
+            el.textContent = el.textContent.replace(
+              /€\s*([\d.,]+)/g,
+              (_match, priceStr) => {
+                const normalised = priceStr.replace(/\./g, "").replace(",", ".");
+                const amount = parseFloat(normalised);
+                if (isNaN(amount) || amount <= 0) return _match;
+                return formatPrice(amount * rate, currency);
+              }
+            );
           }
         }
       }

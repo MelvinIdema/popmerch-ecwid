@@ -1,10 +1,98 @@
 export function initCatalogusSearchExtractor() {
   const GRID_SORT_SELECTOR = ".grid__sort.ec-text-muted";
-  const REAL_INPUT_SELECTOR = ".ec-filter--search input[type='text'], .ec-filter--search .form-control__text";
-  const APPLY_BTN_SELECTOR = ".filter-section-button-container .form-control__button";
+  const REAL_INPUT_SELECTOR =
+    ".ec-filter--search input[type='text'], .ec-filter--search .form-control__text";
+  // Covers both the main apply button and the mobile sticky-bar variant
+  const APPLY_BTN_SELECTOR =
+    ".filter-section-button-container .form-control__button, .filter-section-sticky-bar .form-control__button";
   const STYLES_ID = "popmerch-search-proxy-styles";
   const PROXY_ID = "pm-search-proxy";
   const BUTTONS_WRAPPER_CLASS = "pm-sort-buttons";
+
+  // ─── Helpers ────────────────────────────────────────────────────────────────
+
+  function findRealInput() {
+    for (const el of document.querySelectorAll(REAL_INPUT_SELECTOR)) {
+      if (el instanceof HTMLInputElement) return el;
+    }
+    return null;
+  }
+
+  function setNativeValue(input, value) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    setter ? setter.call(input, value) : (input.value = value);
+  }
+
+  // ─── Search trigger ──────────────────────────────────────────────────────────
+
+  // The filter popup (.ec-filters--popup) is always mounted in the DOM — on mobile it
+  // is just visually hidden via CSS classes. Programmatic .click() fires on hidden
+  // elements just fine, so we use the exact same path on every viewport: set the real
+  // input value (triggering Vue's reactivity), then click the hidden apply button.
+  // No drawer flash, no async dance.
+  function triggerSearch(value) {
+    const realInput = findRealInput();
+    if (!realInput) {
+      console.warn("[Popmerch] proxy search: real filter input not found in DOM");
+      return;
+    }
+
+    // Update the real input — use the native setter so Vue's v-model picks it up
+    setNativeValue(realInput, value);
+    realInput.dispatchEvent(new Event("input", { bubbles: true }));
+    realInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+    // Click apply — works on hidden elements; no popup open/close needed
+    const applyBtn = document.querySelector(APPLY_BTN_SELECTOR);
+    if (applyBtn) {
+      applyBtn.click();
+    } else {
+      console.warn("[Popmerch] proxy search: apply button not found, falling back to Enter");
+      realInput.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true })
+      );
+    }
+  }
+
+  // ─── Proxy element ───────────────────────────────────────────────────────────
+
+  function createProxy() {
+    const wrapper = document.createElement("div");
+    wrapper.id = PROXY_ID;
+    wrapper.setAttribute("role", "search");
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "Zoeken in producten…";
+    input.setAttribute("aria-label", "Zoeken in producten");
+
+    // Pre-fill if the real input already has a value (e.g. after page restore)
+    const realInput = findRealInput();
+    if (realInput?.value) input.value = realInput.value;
+
+    const btn = document.createElement("button");
+    btn.setAttribute("aria-label", "Zoeken");
+    btn.type = "button";
+    btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.5"/>
+      <line x1="11" y1="11" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>`;
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        triggerSearch(input.value);
+      }
+    });
+
+    btn.addEventListener("click", () => triggerSearch(input.value));
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(btn);
+    return wrapper;
+  }
+
+  // ─── Styles ──────────────────────────────────────────────────────────────────
 
   function injectStyles() {
     if (document.getElementById(STYLES_ID)) return;
@@ -74,7 +162,7 @@ export function initCatalogusSearchExtractor() {
         color: #686868;
       }
 
-      /* Keep sort buttons together */
+      /* Keep sort/filter buttons together */
       .${BUTTONS_WRAPPER_CLASS} {
         display: flex;
         align-items: center;
@@ -110,86 +198,9 @@ export function initCatalogusSearchExtractor() {
     document.head.appendChild(style);
   }
 
-  function findRealInput() {
-    const candidates = document.querySelectorAll(REAL_INPUT_SELECTOR);
-    // Prefer the first visible one
-    for (const el of candidates) {
-      if (el instanceof HTMLInputElement) return el;
-    }
-    return null;
-  }
-
-  function triggerSearch(value) {
-    const realInput = findRealInput();
-    if (!realInput) {
-      console.warn("[Popmerch] proxy search: real input not found");
-      return;
-    }
-
-    // Use native setter so Vue's v-model reactive getter/setter picks it up
-    const nativeSetter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      "value"
-    )?.set;
-    if (nativeSetter) {
-      nativeSetter.call(realInput, value);
-    } else {
-      realInput.value = value;
-    }
-
-    realInput.dispatchEvent(new Event("input", { bubbles: true }));
-    realInput.dispatchEvent(new Event("change", { bubbles: true }));
-
-    // Click the Ecwid "Toepassen" apply button if present
-    const applyBtn = document.querySelector(APPLY_BTN_SELECTOR);
-    if (applyBtn) {
-      applyBtn.click();
-    } else {
-      // Fallback: submit via Enter keypress on the real input
-      realInput.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true })
-      );
-    }
-  }
-
-  function createProxy() {
-    const wrapper = document.createElement("div");
-    wrapper.id = PROXY_ID;
-    wrapper.setAttribute("role", "search");
-
-    const input = document.createElement("input");
-    input.type = "text";
-    input.placeholder = "Zoeken in producten…";
-    input.setAttribute("aria-label", "Zoeken in producten");
-
-    // Pre-fill with whatever the real input already has (e.g. after page restore)
-    const realInput = findRealInput();
-    if (realInput?.value) input.value = realInput.value;
-
-    const btn = document.createElement("button");
-    btn.setAttribute("aria-label", "Zoeken");
-    btn.type = "button";
-    btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.5"/>
-      <line x1="11" y1="11" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-    </svg>`;
-
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        triggerSearch(input.value);
-      }
-    });
-
-    btn.addEventListener("click", () => triggerSearch(input.value));
-
-    wrapper.appendChild(input);
-    wrapper.appendChild(btn);
-    return wrapper;
-  }
+  // ─── Injection ───────────────────────────────────────────────────────────────
 
   function inject() {
-    // Guard: already injected
     if (document.getElementById(PROXY_ID)) return;
 
     const gridSort = document.querySelector(GRID_SORT_SELECTOR);
@@ -197,18 +208,20 @@ export function initCatalogusSearchExtractor() {
 
     injectStyles();
 
-    // Wrap existing button children so they stay grouped as a flex row
+    // Wrap the existing Ecwid buttons so they stay grouped as one flex row
     const buttonsWrapper = document.createElement("div");
     buttonsWrapper.className = BUTTONS_WRAPPER_CLASS;
     while (gridSort.firstChild) {
       buttonsWrapper.appendChild(gridSort.firstChild);
     }
 
-    // On desktop: proxy first (left), buttons second (right) via justify-between
-    // On mobile: CSS reverses order visually by using column direction (buttons on top)
+    // DOM order: proxy (left on desktop) → buttons (right on desktop)
+    // Mobile CSS flips via `order`: buttons first, search below
     gridSort.appendChild(createProxy());
     gridSort.appendChild(buttonsWrapper);
   }
+
+  // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
   if (!window.Ecwid?.OnPageLoaded) {
     console.warn("[Popmerch] catalogus-search-extractor: Ecwid API not available");
