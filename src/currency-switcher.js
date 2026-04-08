@@ -28,11 +28,20 @@ export function initCurrencySwitcher(config = {}) {
   // The EUR amount will be parsed from their text on first encounter and cached in
   // the element's `data-pm-eur` attribute for subsequent currency switches.
   const DISPLAY_PRICE_SELECTORS = [
+    // Category / grid
     ".grid-product__price-value",
     ".ins-tile__product-current-price",
+    // Product detail
     ".details-product-price-compare__container s",
     ".details-product-price-tax__value",
+    // Price filter slider limits
     ".ec-range__limit",
+    // Cart — line items, running total, summary table, shipping options, overview
+    ".ec-cart-item__price-inner",
+    ".ec-cart-item-sum--cta",
+    ".ec-cart-summary__price",
+    ".ec-radiogroup__data-title",
+    ".ec-currency-converter-element-shipping-cost",
   ].join(",");
 
   // Class added to our proxy inputs so they can be identified for teardown.
@@ -50,6 +59,7 @@ export function initCurrencySwitcher(config = {}) {
   // replaced via regex so the surrounding sentence is preserved.
   const TEXT_PRICE_SELECTORS = [
     ".ec-text-muted.ec-text-initial-size[store-profile]",
+    "span[data-tax-value]",   // e.g. "Incl. BTW (23%) € 8,77"
   ].join(",");
 
   let cachedRates = null;
