@@ -20,6 +20,7 @@ export function initCatalogusSearchExtractor() {
         gap: 12px;
         flex-wrap: wrap;
         margin-top: 16px;
+        margin-bottom: 16px;
       }
 
       /* Proxy search bar */
