@@ -38,8 +38,12 @@ export function initCurrencySwitcher(config = {}) {
   // Class added to our proxy inputs so they can be identified for teardown.
   const PROXY_CLASS = "pm-price-proxy";
 
-  // Prototype value descriptor used when patching / restoring real input setters.
+  // Prototype value descriptor — used to write to the real input without triggering
+  // any Vue/Ecwid watcher that might be observing the input's value property.
   const INPUT_VALUE_DESCRIPTOR = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+
+  // Holds the MutationObserver watching the slider so teardown can disconnect it.
+  let priceFilterSliderObs = null;
 
   // Selectors for elements that mix prose text with embedded price(s).
   // The original text is stored in `data-pm-original-text` and prices within are
@@ -454,16 +458,18 @@ export function initCurrencySwitcher(config = {}) {
   //   2. Insert visible proxy inputs that display / accept values in the selected currency.
   //   3. Proxy → real: on user input, divide by rate and write to real input, then
   //      fire input + change events so Ecwid picks up the update.
-  //   4. Real → proxy: intercept programmatic `.value` sets (slider drag) and mirror
-  //      the converted value to the proxy.
+  //   4. Real → proxy: poll the real inputs every 150 ms (slider drag sync).
+  //      We deliberately avoid patching the real input's value setter — any setter
+  //      patch creates a feedback loop because Ecwid's Vue reactivity echoes the value
+  //      back asynchronously (after our guard flags have already cleared).
   //   5. On currency change or teardown: remove proxies, restore real inputs.
 
   function teardownPriceFilterProxy() {
+    priceFilterSliderObs?.disconnect();
+    priceFilterSliderObs = null;
     document.querySelectorAll(`.${PROXY_CLASS}`).forEach(proxy => proxy.remove());
     document.querySelectorAll(".ec-filter__price-from input, .ec-filter__price-to input").forEach(input => {
       input.style.display = "";
-      // Remove the instance-level value property we patched, restoring prototype behaviour.
-      try { delete input.value; } catch {}
     });
   }
 
@@ -517,50 +523,55 @@ export function initCurrencySwitcher(config = {}) {
     const fromProxy = createProxy(fromInput);
     const toProxy   = createProxy(toInput);
 
-    // Per-input tracker: stores the EUR value we last wrote from the proxy, so the
-    // patched setter can recognise Ecwid echoing that value back (sync OR async via
-    // Vue nextTick) and ignore it — preventing the proxy from being overwritten with
-    // a reconverted value while the user is typing.
-    // A debounced timer clears the tracker so legitimate slider updates still get through.
-    const fromLastEur = { value: null, timer: null };
-    const toLastEur   = { value: null, timer: null };
-
-    // Intercept slider / programmatic updates to real inputs → mirror to proxy.
-    function patchValueSetter(realInput, proxyInput, lastEur) {
-      Object.defineProperty(realInput, "value", {
-        configurable: true,
-        set(v) {
-          INPUT_VALUE_DESCRIPTOR.set.call(this, v);
-          if (v === lastEur.value) return; // Ecwid echoing what proxy just set — ignore
-          proxyInput.value = eurToDisplay(v);
-        },
-        get() {
-          return INPUT_VALUE_DESCRIPTOR.get.call(this);
-        },
-      });
-    }
-
-    patchValueSetter(fromInput, fromProxy, fromLastEur);
-    patchValueSetter(toInput,   toProxy,   toLastEur);
+    // Typing flags — pause slider polling while the user is mid-input so we don't
+    // overwrite their value with a slider-driven update.
+    let fromTyping = false;
+    let toTyping   = false;
 
     // User types in proxy → convert to EUR → write to real input → notify Ecwid.
-    function syncProxyToReal(proxyInput, realInput, lastEur) {
-      const eurVal = displayToEur(proxyInput.value);
-      lastEur.value = eurVal;
-      // Debounce: reset the tracker 300 ms after the last keystroke, covering both
-      // Vue nextTick (microtask) and any setTimeout-based async echoes from Ecwid.
-      clearTimeout(lastEur.timer);
-      lastEur.timer = setTimeout(() => { lastEur.value = null; }, 300);
-
-      INPUT_VALUE_DESCRIPTOR.set.call(realInput, eurVal);
+    // No setter patch on the real input: without a patch there is no channel for
+    // Ecwid's async echo to reach the proxy, so the "5 → 4.68" loop cannot occur.
+    function syncProxyToReal(proxyInput, realInput, setTyping) {
+      setTyping(true);
+      INPUT_VALUE_DESCRIPTOR.set.call(realInput, displayToEur(proxyInput.value));
       realInput.dispatchEvent(new Event("input",  { bubbles: true }));
       realInput.dispatchEvent(new Event("change", { bubbles: true }));
+      // Keep typing flag true long enough for all async Ecwid/Vue echoes to settle.
+      setTimeout(() => setTyping(false), 300);
     }
 
-    fromProxy.addEventListener("input", () => syncProxyToReal(fromProxy, fromInput, fromLastEur));
-    toProxy.addEventListener("input",   () => syncProxyToReal(toProxy,   toInput,   toLastEur));
+    fromProxy.addEventListener("input", () =>
+      syncProxyToReal(fromProxy, fromInput, (v) => { fromTyping = v; }));
+    toProxy.addEventListener("input", () =>
+      syncProxyToReal(toProxy, toInput, (v) => { toTyping = v; }));
 
-    // Populate proxy with any value the real input already has.
+    // Slider → proxy: the slider runners update their `style` attribute (left: X%)
+    // as they're dragged. Watch for those attribute changes and mirror the real
+    // input's new EUR value to the proxy — no polling needed.
+    const rangeEl = fromWrapper.closest(".ec-filter__items-inner")?.querySelector(".ec-range")
+      ?? fromWrapper.parentElement?.querySelector(".ec-range");
+
+    if (rangeEl) {
+      priceFilterSliderObs = new MutationObserver(() => {
+        if (!fromTyping) {
+          const v = eurToDisplay(fromInput.value);
+          if (fromProxy.value !== v) fromProxy.value = v;
+        }
+        if (!toTyping) {
+          const v = eurToDisplay(toInput.value);
+          if (toProxy.value !== v) toProxy.value = v;
+        }
+      });
+      priceFilterSliderObs.observe(rangeEl, {
+        attributes: true,
+        subtree: true,
+        attributeFilter: ["style"],
+      });
+    } else {
+      log("Range slider element not found — slider sync unavailable");
+    }
+
+    // Populate proxy with any value the real input already has (e.g. after re-mount).
     if (fromInput.value) fromProxy.value = eurToDisplay(fromInput.value);
     if (toInput.value)   toProxy.value   = eurToDisplay(toInput.value);
 
