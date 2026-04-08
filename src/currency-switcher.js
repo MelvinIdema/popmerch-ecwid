@@ -382,11 +382,14 @@ export function initCurrencySwitcher(config = {}) {
   // ─── Announcement bar switcher ────────────────────────────────────────────
 
   function mountBarSwitcher() {
-    function doBarInject(currencyEl) {
-      if (currencyEl.querySelector(".pm-currency__bar-wrap")) return; // already present
+    function doBarInject(el) {
+      // Vue template not yet hydrated — the observer will fire again once Vue renders.
+      if (el.textContent.includes("{{")) return;
+      // Dropdown already present — nothing to do.
+      if (el.querySelector(".pm-currency__bar-wrap")) return;
 
       injectStyles();
-      currencyEl.textContent = ""; // clear Vue's "EUR" text node
+      el.textContent = ""; // clear Vue's rendered currency text
 
       const wrap = document.createElement("span");
       wrap.className = "pm-currency__bar-wrap";
@@ -404,7 +407,7 @@ export function initCurrencySwitcher(config = {}) {
 
       wrap.appendChild(select);
       wrap.appendChild(arrow);
-      currencyEl.appendChild(wrap);
+      el.appendChild(wrap);
 
       select.addEventListener("change", () => {
         saveSelectedCurrency(select.value);
@@ -420,19 +423,20 @@ export function initCurrencySwitcher(config = {}) {
     let attempts = 0;
     const poll = setInterval(() => {
       attempts++;
-      const currencyEl = document.querySelector(".announcement-bar__currency");
+      const el = document.querySelector(".announcement-bar__currency");
 
-      if (currencyEl) {
+      if (el) {
         clearInterval(poll);
-        doBarInject(currencyEl);
 
-        const hooked = hookVueUpdated(currencyEl, () => doBarInject(currencyEl));
+        // Observe el itself: Vue re-renders by replacing children of el
+        // (our span → text node), which is a childList mutation on el, not its parent.
+        const obs = new MutationObserver(() => doBarInject(el));
+        obs.observe(el, { childList: true });
 
-        if (!hooked) {
-          log("Vue not accessible — falling back to targeted MutationObserver");
-          const obs = new MutationObserver(() => doBarInject(currencyEl));
-          obs.observe(currencyEl.parentElement ?? currencyEl, { childList: true });
-        }
+        // Belt-and-suspenders: also hook Vue's updated() lifecycle if accessible.
+        hookVueUpdated(el, () => doBarInject(el));
+
+        doBarInject(el);
         return;
       }
 
