@@ -1,7 +1,9 @@
 export function initCatalogusSearchExtractor() {
   const GRID_SORT_SELECTOR = ".grid__sort.ec-text-muted";
+  // Cast a wide net — on mobile the input may not carry type="text" explicitly,
+  // and the class structure can differ. We'll verify it's an <input> in findRealInput.
   const REAL_INPUT_SELECTOR =
-    ".ec-filter--search input[type='text'], .ec-filter--search .form-control__text";
+    ".ec-filter--search input, .ec-filters input";
   // Covers both the main apply button and the mobile sticky-bar variant
   const APPLY_BTN_SELECTOR =
     ".filter-section-button-container .form-control__button, .filter-section-sticky-bar .form-control__button";
@@ -111,9 +113,11 @@ export function initCatalogusSearchExtractor() {
 
     waitForRealInput()
       .then((input) => {
-        applyValue(input, value);
-        // Give Ecwid one frame to process the apply before restoring visibility
-        requestAnimationFrame(ghostOff);
+        // One extra frame — Vue's Suspense resolves before the full subtree is patched
+        requestAnimationFrame(() => {
+          applyValue(input, value);
+          requestAnimationFrame(ghostOff);
+        });
       })
       .catch((err) => {
         console.warn("[Popmerch] proxy search:", err.message);

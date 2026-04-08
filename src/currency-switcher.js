@@ -499,6 +499,10 @@ export function initCurrencySwitcher(config = {}) {
       return String(Math.round((n / rate) * 100) / 100);
     }
 
+    // Guard: prevents our patched setter from updating the proxy while we ourselves
+    // are writing to the real input (and firing events that make Ecwid echo the value back).
+    let proxyIsSyncing = false;
+
     function createProxy(realInput) {
       const proxy = document.createElement("input");
       proxy.className = realInput.className + ` ${PROXY_CLASS}`;
@@ -515,12 +519,15 @@ export function initCurrencySwitcher(config = {}) {
     const toProxy   = createProxy(toInput);
 
     // Intercept slider / programmatic updates to real inputs → mirror to proxy.
+    // The proxyIsSyncing guard prevents re-entrancy: when we fire input/change events
+    // after writing to the real input, Ecwid may echo the value back through this setter.
+    // Without the guard that would reconvert EUR → display currency, overwriting the user's input.
     function patchValueSetter(realInput, proxyInput) {
       Object.defineProperty(realInput, "value", {
         configurable: true,
         set(v) {
           INPUT_VALUE_DESCRIPTOR.set.call(this, v);
-          proxyInput.value = eurToDisplay(v);
+          if (!proxyIsSyncing) proxyInput.value = eurToDisplay(v);
         },
         get() {
           return INPUT_VALUE_DESCRIPTOR.get.call(this);
@@ -533,9 +540,11 @@ export function initCurrencySwitcher(config = {}) {
 
     // User types in proxy → convert to EUR → write to real input → notify Ecwid.
     function syncProxyToReal(proxyInput, realInput) {
+      proxyIsSyncing = true;
       INPUT_VALUE_DESCRIPTOR.set.call(realInput, displayToEur(proxyInput.value));
       realInput.dispatchEvent(new Event("input",  { bubbles: true }));
       realInput.dispatchEvent(new Event("change", { bubbles: true }));
+      proxyIsSyncing = false;
     }
 
     fromProxy.addEventListener("input", () => syncProxyToReal(fromProxy, fromInput));
