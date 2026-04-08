@@ -90,6 +90,7 @@ export function initCatalogusSearchExtractor() {
 
         .${BUTTONS_WRAPPER_CLASS} {
           width: 100%;
+          order: 0;
         }
 
         /* Make the two sort/filter buttons fill the row equally */
@@ -101,6 +102,7 @@ export function initCatalogusSearchExtractor() {
           max-width: 100%;
           width: 100%;
           flex: none;
+          order: 1;
         }
       }
     `;
