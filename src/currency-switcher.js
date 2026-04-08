@@ -383,8 +383,6 @@ export function initCurrencySwitcher(config = {}) {
 
   function mountBarSwitcher() {
     function doBarInject(el) {
-      // Vue template not yet hydrated — the observer will fire again once Vue renders.
-      if (el.textContent.includes("{{")) return;
       // Dropdown already present — nothing to do.
       if (el.querySelector(".pm-currency__bar-wrap")) return;
 
