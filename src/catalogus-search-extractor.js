@@ -1,14 +1,10 @@
 export function initCatalogusSearchExtractor() {
-  const MOBILE_BREAKPOINT = 768;
-  const SEARCH_FILTER_SELECTOR = ".ec-filter.ec-filter--search";
-  const PAGE_TITLE_SELECTOR = ".ec-page-title";
-  const SHORT_DESCRIPTION_SELECTOR = ".ec-page-short_description";
-  const EXTRACTED_CLASS = "ec-filter--extracted-search";
-  const STYLES_ID = "popmerch-search-extractor-styles";
-
-  function isMobile() {
-    return window.innerWidth < MOBILE_BREAKPOINT;
-  }
+  const GRID_SORT_SELECTOR = ".grid__sort.ec-text-muted";
+  const REAL_INPUT_SELECTOR = ".ec-filter--search input[type='text'], .ec-filter--search .form-control__text";
+  const APPLY_BTN_SELECTOR = ".filter-section-button-container .form-control__button";
+  const STYLES_ID = "popmerch-search-proxy-styles";
+  const PROXY_ID = "pm-search-proxy";
+  const BUTTONS_WRAPPER_CLASS = "pm-sort-buttons";
 
   function injectStyles() {
     if (document.getElementById(STYLES_ID)) return;
@@ -16,100 +12,190 @@ export function initCatalogusSearchExtractor() {
     const style = document.createElement("style");
     style.id = STYLES_ID;
     style.textContent = `
-      .ec-filter--extracted-search {
-        width: 100%;
-        margin: 12px 0 20px;
+      /* Toolbar: search left, buttons right on desktop */
+      .grid__sort.ec-text-muted {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      /* Proxy search bar */
+      #${PROXY_ID} {
+        display: flex;
+        align-items: center;
+        border: 2px solid #1a1a1a;
+        flex: 1 1 200px;
+        max-width: 340px;
         box-sizing: border-box;
       }
 
-      /* Remove the sidebar toggle header — not needed on the page */
-      .ec-filter--extracted-search .ec-filter__head {
-        display: none;
-      }
-
-      /* Remove inner top bar (title + close button + wissen link) */
-      .ec-filter--extracted-search .ec-filter__top {
-        display: none;
-      }
-
-      /* Force the body open — undo any Ecwid animation/transition state */
-      .ec-filter--extracted-search .ec-openable-block,
-      .ec-filter--extracted-search .ec-openable-block__wrap {
-        display: block !important;
-        max-height: none !important;
-        overflow: visible !important;
-        opacity: 1 !important;
-      }
-
-      /* Remove wrapper padding added by the sidebar layout */
-      .ec-filter--extracted-search .ec-openable-block__wrap-inner {
-        padding: 0 !important;
-      }
-
-      /* Input border to match the page's button style */
-      .ec-filter--extracted-search .ec-filter__keyword-wrap .form-control {
-        border: 2px solid #1a1a1a;
-        border-radius: 0;
-        background: #fff;
-      }
-
-      .ec-filter--extracted-search .form-control__text {
-        padding: 12px 16px;
-        font-size: 15px;
-        color: #1a1a1a;
-      }
-
-      /* "Toepassen" button styled to match VERFIJNEN OP / SORTEER OP */
-      .ec-filter--extracted-search .filter-section-button-container {
-        margin-top: 10px;
-      }
-
-      .ec-filter--extracted-search .filter-section-button-container .form-control__button {
-        width: 100%;
-        border: 2px solid #1a1a1a;
-        border-radius: 0;
+      #${PROXY_ID} input {
+        flex: 1;
+        border: none;
+        outline: none;
+        padding: 10px 14px;
+        font-size: 14px;
+        font-family: inherit;
         background: transparent;
         color: #1a1a1a;
-        padding: 14px 16px;
-        font-size: 13px;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        cursor: pointer;
+        min-width: 0;
       }
 
-      .ec-filter--extracted-search .filter-section-button-container .form-control__button:hover {
+      #${PROXY_ID} input::placeholder {
+        color: #999;
+      }
+
+      #${PROXY_ID} button {
+        flex-shrink: 0;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        padding: 10px 12px;
+        display: flex;
+        align-items: center;
+        color: #1a1a1a;
+        transition: background 0.15s, color 0.15s;
+      }
+
+      #${PROXY_ID} button:hover {
         background: #1a1a1a;
         color: #fff;
       }
 
-      /* Hide the sticky-bar duplicate of the apply button */
-      .ec-filter--extracted-search .filter-section-sticky-bar {
-        display: none !important;
+      /* Keep sort buttons together */
+      .${BUTTONS_WRAPPER_CLASS} {
+        display: flex;
+        align-items: center;
+        flex-shrink: 0;
+      }
+
+      /* Mobile: stack — buttons on top, search below */
+      @media (max-width: 768px) {
+        .grid__sort.ec-text-muted {
+          flex-direction: column;
+          align-items: stretch;
+          gap: 10px;
+        }
+
+        .${BUTTONS_WRAPPER_CLASS} {
+          width: 100%;
+        }
+
+        /* Make the two sort/filter buttons fill the row equally */
+        .${BUTTONS_WRAPPER_CLASS} .form-control {
+          flex: 1;
+        }
+
+        #${PROXY_ID} {
+          max-width: 100%;
+          width: 100%;
+          flex: none;
+        }
       }
     `;
     document.head.appendChild(style);
   }
 
-  function processSearchExtraction() {
-    if (!isMobile()) return;
+  function findRealInput() {
+    const candidates = document.querySelectorAll(REAL_INPUT_SELECTOR);
+    // Prefer the first visible one
+    for (const el of candidates) {
+      if (el instanceof HTMLInputElement) return el;
+    }
+    return null;
+  }
 
-    // Guard: already extracted on this page render
-    if (document.querySelector(`.${EXTRACTED_CLASS}`)) return;
+  function triggerSearch(value) {
+    const realInput = findRealInput();
+    if (!realInput) {
+      console.warn("[Popmerch] proxy search: real input not found");
+      return;
+    }
 
-    const searchFilter = document.querySelector(SEARCH_FILTER_SELECTOR);
-    if (!searchFilter) return;
+    // Use native setter so Vue's v-model reactive getter/setter picks it up
+    const nativeSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      "value"
+    )?.set;
+    if (nativeSetter) {
+      nativeSetter.call(realInput, value);
+    } else {
+      realInput.value = value;
+    }
 
-    // Insert after short description if present, otherwise after the page title
-    const anchor =
-      document.querySelector(SHORT_DESCRIPTION_SELECTOR) ||
-      document.querySelector(PAGE_TITLE_SELECTOR);
-    if (!anchor) return;
+    realInput.dispatchEvent(new Event("input", { bubbles: true }));
+    realInput.dispatchEvent(new Event("change", { bubbles: true }));
 
-    searchFilter.classList.add(EXTRACTED_CLASS);
-    anchor.parentNode.insertBefore(searchFilter, anchor.nextSibling);
+    // Click the Ecwid "Toepassen" apply button if present
+    const applyBtn = document.querySelector(APPLY_BTN_SELECTOR);
+    if (applyBtn) {
+      applyBtn.click();
+    } else {
+      // Fallback: submit via Enter keypress on the real input
+      realInput.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", keyCode: 13, bubbles: true })
+      );
+    }
+  }
+
+  function createProxy() {
+    const wrapper = document.createElement("div");
+    wrapper.id = PROXY_ID;
+    wrapper.setAttribute("role", "search");
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "Zoeken in producten…";
+    input.setAttribute("aria-label", "Zoeken in producten");
+
+    // Pre-fill with whatever the real input already has (e.g. after page restore)
+    const realInput = findRealInput();
+    if (realInput?.value) input.value = realInput.value;
+
+    const btn = document.createElement("button");
+    btn.setAttribute("aria-label", "Zoeken");
+    btn.type = "button";
+    btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="6.5" cy="6.5" r="5.5" stroke="currentColor" stroke-width="1.5"/>
+      <line x1="11" y1="11" x2="14.5" y2="14.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+    </svg>`;
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        triggerSearch(input.value);
+      }
+    });
+
+    btn.addEventListener("click", () => triggerSearch(input.value));
+
+    wrapper.appendChild(input);
+    wrapper.appendChild(btn);
+    return wrapper;
+  }
+
+  function inject() {
+    // Guard: already injected
+    if (document.getElementById(PROXY_ID)) return;
+
+    const gridSort = document.querySelector(GRID_SORT_SELECTOR);
+    if (!gridSort) return;
 
     injectStyles();
+
+    // Wrap existing button children so they stay grouped as a flex row
+    const buttonsWrapper = document.createElement("div");
+    buttonsWrapper.className = BUTTONS_WRAPPER_CLASS;
+    while (gridSort.firstChild) {
+      buttonsWrapper.appendChild(gridSort.firstChild);
+    }
+
+    // On desktop: proxy first (left), buttons second (right) via justify-between
+    // On mobile: CSS reverses order visually by using column direction (buttons on top)
+    gridSort.appendChild(createProxy());
+    gridSort.appendChild(buttonsWrapper);
   }
 
   if (!window.Ecwid?.OnPageLoaded) {
@@ -120,11 +206,8 @@ export function initCatalogusSearchExtractor() {
   window.Ecwid.OnPageLoaded.add(function (page) {
     if (page.type !== "CATEGORY") return;
 
-    // Defer one frame so catalogus-short-description runs first
-    // (it's registered before us, but we both use rAF — a second defer
-    // ensures the short description div is in the DOM when we look for it)
     window.requestAnimationFrame(function () {
-      window.requestAnimationFrame(processSearchExtraction);
+      window.requestAnimationFrame(inject);
     });
   });
 }
