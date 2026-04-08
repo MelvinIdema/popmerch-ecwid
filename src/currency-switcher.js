@@ -523,20 +523,35 @@ export function initCurrencySwitcher(config = {}) {
     const fromProxy = createProxy(fromInput);
     const toProxy   = createProxy(toInput);
 
-    // Typing flags — pause slider polling while the user is mid-input so we don't
-    // overwrite their value with a slider-driven update.
+    // Typing flags — pause slider sync while the user is mid-input so the observer
+    // doesn't overwrite their value with a slider-driven update.
     let fromTyping = false;
     let toTyping   = false;
 
+    // Shared debounce: clicking Apply is deferred until the user stops typing across
+    // both inputs. We look up the button at call-time so we always get the live element.
+    const applyDebounce = { timer: null };
+    function scheduleApply() {
+      clearTimeout(applyDebounce.timer);
+      applyDebounce.timer = setTimeout(() => {
+        const btn =
+          fromWrapper.closest(".ec-filter--price, .ec-filter")
+            ?.querySelector(".filter-section-button-container .form-control__button")
+          ?? document.querySelector(".filter-section-sticky-bar .form-control__button");
+        btn?.click();
+        log("Price filter auto-applied");
+      }, 500);
+    }
+
     // User types in proxy → convert to EUR → write to real input → notify Ecwid.
-    // No setter patch on the real input: without a patch there is no channel for
-    // Ecwid's async echo to reach the proxy, so the "5 → 4.68" loop cannot occur.
+    // Dispatching input/change on every keystroke keeps the slider in sync.
+    // The Apply click is debounced so the filter only runs when the user pauses.
     function syncProxyToReal(proxyInput, realInput, setTyping) {
       setTyping(true);
       INPUT_VALUE_DESCRIPTOR.set.call(realInput, displayToEur(proxyInput.value));
       realInput.dispatchEvent(new Event("input",  { bubbles: true }));
       realInput.dispatchEvent(new Event("change", { bubbles: true }));
-      // Keep typing flag true long enough for all async Ecwid/Vue echoes to settle.
+      scheduleApply();
       setTimeout(() => setTyping(false), 300);
     }
 
