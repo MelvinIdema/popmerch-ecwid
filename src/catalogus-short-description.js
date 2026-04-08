@@ -3,27 +3,24 @@ export function initCatalogusShortDescription() {
   const PAGE_TITLE_SELECTOR = ".ec-page-title";
   const SHORT_DESCRIPTION_CLASS = "ec-page-short_description";
 
+  function cleanup() {
+    document.querySelector(`.${SHORT_DESCRIPTION_CLASS}`)?.remove();
+  }
+
   function processShortDescription() {
+    // Always remove a stale short description first — Vue does not clean up
+    // elements we injected outside its virtual DOM when navigating between pages.
+    cleanup();
+
     const descriptionInner = document.querySelector(GRID_DESCRIPTION_SELECTOR);
-    if (!descriptionInner) {
-      return;
-    }
+    if (!descriptionInner) return;
 
     // Only act when the first direct child is a blockquote
     const blockquote = descriptionInner.firstElementChild;
-    if (!blockquote || blockquote.tagName !== "BLOCKQUOTE") {
-      return;
-    }
+    if (!blockquote || blockquote.tagName !== "BLOCKQUOTE") return;
 
     const pageTitle = document.querySelector(PAGE_TITLE_SELECTOR);
-    if (!pageTitle) {
-      return;
-    }
-
-    // Don't inject twice on the same page render
-    if (pageTitle.nextElementSibling?.classList.contains(SHORT_DESCRIPTION_CLASS)) {
-      return;
-    }
+    if (!pageTitle) return;
 
     // Capture inner HTML before removing (preserves inline formatting)
     const blockquoteHTML = blockquote.innerHTML;
@@ -47,6 +44,8 @@ export function initCatalogusShortDescription() {
 
   window.Ecwid.OnPageLoaded.add(function (page) {
     if (page.type !== "CATEGORY") {
+      // Navigating away from a category — clean up in case Vue left our div behind.
+      window.requestAnimationFrame(cleanup);
       return;
     }
 

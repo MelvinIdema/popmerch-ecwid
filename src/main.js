@@ -3,6 +3,8 @@ import { initAddressValidation } from "./address-validation.js";
 import { initMobileFilterTileStacking } from "./mobile-filter-tile-stacking.js";
 import { initCurrencySwitcher } from "./currency-switcher.js";
 import { initCatalogusShortDescription } from "./catalogus-short-description.js";
+import { initCatalogusSearchExtractor } from "./catalogus-search-extractor.js";
+import { initReplacePager } from "./replace-pager.js";
 
 // Replace with your Geoapify API key (https://myprojects.geoapify.com)
 const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
@@ -40,6 +42,14 @@ safeInit("mobile filter tile stacking", () => {
 
 safeInit("catalogus short description", () => {
   initCatalogusShortDescription();
+});
+
+safeInit("catalogus search extractor", () => {
+  initCatalogusSearchExtractor();
+});
+
+safeInit("replace pager", () => {
+  initReplacePager();
 });
 
 if (ENABLE_CURRENCY_SWITCHER) {
