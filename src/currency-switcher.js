@@ -29,6 +29,7 @@ export function initCurrencySwitcher(config = {}) {
   // the element's `data-pm-eur` attribute for subsequent currency switches.
   const DISPLAY_PRICE_SELECTORS = [
     ".grid-product__price-value",
+    ".ins-tile__product-current-price",
     ".details-product-price-compare__container s",
     ".details-product-price-tax__value",
     ".ec-range__limit",
@@ -501,10 +502,6 @@ export function initCurrencySwitcher(config = {}) {
       return String(Math.round((n / rate) * 100) / 100);
     }
 
-    // Guard: prevents our patched setter from updating the proxy while we ourselves
-    // are writing to the real input (and firing events that make Ecwid echo the value back).
-    let proxyIsSyncing = false;
-
     function createProxy(realInput) {
       const proxy = document.createElement("input");
       proxy.className = realInput.className + ` ${PROXY_CLASS}`;
@@ -520,16 +517,22 @@ export function initCurrencySwitcher(config = {}) {
     const fromProxy = createProxy(fromInput);
     const toProxy   = createProxy(toInput);
 
+    // Per-input tracker: stores the EUR value we last wrote from the proxy, so the
+    // patched setter can recognise Ecwid echoing that value back (sync OR async via
+    // Vue nextTick) and ignore it — preventing the proxy from being overwritten with
+    // a reconverted value while the user is typing.
+    // A debounced timer clears the tracker so legitimate slider updates still get through.
+    const fromLastEur = { value: null, timer: null };
+    const toLastEur   = { value: null, timer: null };
+
     // Intercept slider / programmatic updates to real inputs → mirror to proxy.
-    // The proxyIsSyncing guard prevents re-entrancy: when we fire input/change events
-    // after writing to the real input, Ecwid may echo the value back through this setter.
-    // Without the guard that would reconvert EUR → display currency, overwriting the user's input.
-    function patchValueSetter(realInput, proxyInput) {
+    function patchValueSetter(realInput, proxyInput, lastEur) {
       Object.defineProperty(realInput, "value", {
         configurable: true,
         set(v) {
           INPUT_VALUE_DESCRIPTOR.set.call(this, v);
-          if (!proxyIsSyncing) proxyInput.value = eurToDisplay(v);
+          if (v === lastEur.value) return; // Ecwid echoing what proxy just set — ignore
+          proxyInput.value = eurToDisplay(v);
         },
         get() {
           return INPUT_VALUE_DESCRIPTOR.get.call(this);
@@ -537,20 +540,25 @@ export function initCurrencySwitcher(config = {}) {
       });
     }
 
-    patchValueSetter(fromInput, fromProxy);
-    patchValueSetter(toInput,   toProxy);
+    patchValueSetter(fromInput, fromProxy, fromLastEur);
+    patchValueSetter(toInput,   toProxy,   toLastEur);
 
     // User types in proxy → convert to EUR → write to real input → notify Ecwid.
-    function syncProxyToReal(proxyInput, realInput) {
-      proxyIsSyncing = true;
-      INPUT_VALUE_DESCRIPTOR.set.call(realInput, displayToEur(proxyInput.value));
+    function syncProxyToReal(proxyInput, realInput, lastEur) {
+      const eurVal = displayToEur(proxyInput.value);
+      lastEur.value = eurVal;
+      // Debounce: reset the tracker 300 ms after the last keystroke, covering both
+      // Vue nextTick (microtask) and any setTimeout-based async echoes from Ecwid.
+      clearTimeout(lastEur.timer);
+      lastEur.timer = setTimeout(() => { lastEur.value = null; }, 300);
+
+      INPUT_VALUE_DESCRIPTOR.set.call(realInput, eurVal);
       realInput.dispatchEvent(new Event("input",  { bubbles: true }));
       realInput.dispatchEvent(new Event("change", { bubbles: true }));
-      proxyIsSyncing = false;
     }
 
-    fromProxy.addEventListener("input", () => syncProxyToReal(fromProxy, fromInput));
-    toProxy.addEventListener("input",   () => syncProxyToReal(toProxy,   toInput));
+    fromProxy.addEventListener("input", () => syncProxyToReal(fromProxy, fromInput, fromLastEur));
+    toProxy.addEventListener("input",   () => syncProxyToReal(toProxy,   toInput,   toLastEur));
 
     // Populate proxy with any value the real input already has.
     if (fromInput.value) fromProxy.value = eurToDisplay(fromInput.value);
