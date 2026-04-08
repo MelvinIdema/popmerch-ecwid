@@ -170,14 +170,7 @@ export function initCurrencySwitcher(config = {}) {
     // Apply the detected currency if it differs from what is currently shown.
     if (detected !== getSelectedCurrency()) return; // user preference took over
     if (currentBarSelect) currentBarSelect.value = detected;
-    if (cachedRates) {
-      convertAllPrices(detected, cachedRates);
-      // The homepage renders Instant Site tiles asynchronously — some may not be in
-      // the DOM yet when the line above runs. Schedule two follow-up sweeps so any
-      // content that appears shortly after detection is still converted.
-      setTimeout(() => convertAllPrices(detected, cachedRates), 300);
-      setTimeout(() => convertAllPrices(detected, cachedRates), 1200);
-    }
+    if (cachedRates) convertAllPrices(detected, cachedRates);
   }
 
   // ─── Exchange rates ───────────────────────────────────────────────────────
@@ -703,18 +696,7 @@ export function initCurrencySwitcher(config = {}) {
   fetchRates().then((rates) => {
     if (!rates) return;
     cachedRates = rates;
-
-    // Run immediately, then sweep again at increasing intervals.
-    // The homepage's Instant Site Vue components hydrate asynchronously and can
-    // render (or re-render) after our initial call. OnPageLoaded does not reliably
-    // fire for the homepage, so we cannot rely on it as the only trigger.
-    // convertAllPrices is idempotent — re-running it on an already-converted page
-    // produces the same output with no visible flicker.
-    const apply = () => convertAllPrices(getSelectedCurrency(), cachedRates);
-    apply();
-    setTimeout(apply, 400);
-    setTimeout(apply, 1200);
-
+    convertAllPrices(getSelectedCurrency(), cachedRates);
     mountPriceFilterProxy();
   });
 
@@ -726,6 +708,14 @@ export function initCurrencySwitcher(config = {}) {
         mountPriceFilterProxy();
       }, 150);
     }
+  });
+
+  // Instant Site sections are lazy-loaded as the user scrolls — each tile is added
+  // to the DOM on demand. Re-run conversion whenever a tile becomes visible so
+  // prices inside it are always shown in the selected currency.
+  window.instantsite?.onTileLoaded?.add(() => {
+    if (cachedRates) convertAllPrices(getSelectedCurrency(), cachedRates);
+    log("Instant Site tile loaded — prices converted");
   });
 
   log("Currency switcher initialised");
