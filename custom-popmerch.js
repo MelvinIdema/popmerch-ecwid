@@ -1387,6 +1387,48 @@
     });
     log("Currency switcher initialised");
   }
+  function initCatalogusShortDescription() {
+    var _a;
+    const GRID_DESCRIPTION_SELECTOR = ".grid__description-inner";
+    const PAGE_TITLE_SELECTOR = ".ec-page-title";
+    const SHORT_DESCRIPTION_CLASS = "ec-page-short_description";
+    function processShortDescription() {
+      var _a2;
+      const descriptionInner = document.querySelector(GRID_DESCRIPTION_SELECTOR);
+      if (!descriptionInner) {
+        return;
+      }
+      const blockquote = descriptionInner.firstElementChild;
+      if (!blockquote || blockquote.tagName !== "BLOCKQUOTE") {
+        return;
+      }
+      const pageTitle = document.querySelector(PAGE_TITLE_SELECTOR);
+      if (!pageTitle) {
+        return;
+      }
+      if ((_a2 = pageTitle.nextElementSibling) == null ? void 0 : _a2.classList.contains(SHORT_DESCRIPTION_CLASS)) {
+        return;
+      }
+      const blockquoteHTML = blockquote.innerHTML;
+      blockquote.remove();
+      const p = document.createElement("p");
+      p.innerHTML = blockquoteHTML;
+      const div = document.createElement("div");
+      div.classList.add(SHORT_DESCRIPTION_CLASS);
+      div.appendChild(p);
+      pageTitle.parentNode.insertBefore(div, pageTitle.nextSibling);
+    }
+    if (!((_a = window.Ecwid) == null ? void 0 : _a.OnPageLoaded)) {
+      console.warn("[Popmerch] catalogus-short-description: Ecwid API not available");
+      return;
+    }
+    window.Ecwid.OnPageLoaded.add(function(page) {
+      if (page.type !== "CATEGORY") {
+        return;
+      }
+      window.requestAnimationFrame(processShortDescription);
+    });
+  }
   const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
   const BUNDLE_VERSION = "2026-03-21-inline-checkout-5";
   const ENABLE_CURRENCY_SWITCHER = localStorage.getItem("ENABLE_CURRENCY_SWITCHER") === "true" || false;
@@ -1409,6 +1451,9 @@
   }
   safeInit("mobile filter tile stacking", () => {
     initMobileFilterTileStacking();
+  });
+  safeInit("catalogus short description", () => {
+    initCatalogusShortDescription();
   });
   if (ENABLE_CURRENCY_SWITCHER) {
     safeInit("currency switcher", () => {

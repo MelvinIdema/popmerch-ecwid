@@ -2,6 +2,7 @@ import { initUrlLocalization } from "./url-localization.js";
 import { initAddressValidation } from "./address-validation.js";
 import { initMobileFilterTileStacking } from "./mobile-filter-tile-stacking.js";
 import { initCurrencySwitcher } from "./currency-switcher.js";
+import { initCatalogusShortDescription } from "./catalogus-short-description.js";
 
 // Replace with your Geoapify API key (https://myprojects.geoapify.com)
 const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
@@ -35,6 +36,10 @@ if (ENABLE_ADDRESS_VALIDATION) {
 
 safeInit("mobile filter tile stacking", () => {
   initMobileFilterTileStacking();
+});
+
+safeInit("catalogus short description", () => {
+  initCatalogusShortDescription();
 });
 
 if (ENABLE_CURRENCY_SWITCHER) {
