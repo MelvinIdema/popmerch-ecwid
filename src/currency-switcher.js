@@ -3,6 +3,8 @@ export function initCurrencySwitcher(config = {}) {
   const CACHE_KEY = "popmerch_fx_rates";
   const CACHE_TTL = 12 * 60 * 60 * 1000; // 12 hours
   const PREF_KEY = "popmerch_currency";
+  const IP_CURRENCY_KEY = "popmerch_ip_currency";
+  const IP_CURRENCY_TTL = 24 * 60 * 60 * 1000; // 24 hours
   const STYLES_ID = "pm-currency-styles";
   const POLL_INTERVAL = 50;
 
@@ -23,6 +25,17 @@ export function initCurrencySwitcher(config = {}) {
   };
 
   const ZERO_DECIMAL = new Set(["JPY", "HUF"]);
+
+  // Used as a fallback when the IP API returns a country code instead of a currency.
+  const COUNTRY_CURRENCY_MAP = {
+    // Eurozone
+    AT: "EUR", BE: "EUR", CY: "EUR", EE: "EUR", FI: "EUR", FR: "EUR",
+    DE: "EUR", GR: "EUR", IE: "EUR", IT: "EUR", LV: "EUR", LT: "EUR",
+    LU: "EUR", MT: "EUR", NL: "EUR", PT: "EUR", SK: "EUR", SI: "EUR", ES: "EUR",
+    // Other supported currencies
+    GB: "GBP", US: "USD", CH: "CHF", SE: "SEK", NO: "NOK", DK: "DKK",
+    PL: "PLN", CZ: "CZK", HU: "HUF", JP: "JPY", CA: "CAD", AU: "AUD",
+  };
 
   // Selectors for standalone price elements without a schema.org `content` attribute.
   // The EUR amount will be parsed from their text on first encounter and cached in
@@ -81,14 +94,83 @@ export function initCurrencySwitcher(config = {}) {
 
   function getSelectedCurrency() {
     try {
+      // 1. Explicit user choice always wins.
       const saved = localStorage.getItem(PREF_KEY);
       if (saved && CURRENCIES[saved]) return saved;
+      // 2. IP-detected currency (cached, no explicit preference set yet).
+      const raw = localStorage.getItem(IP_CURRENCY_KEY);
+      if (raw) {
+        const { currency, ts } = JSON.parse(raw);
+        if (Date.now() - ts < IP_CURRENCY_TTL && CURRENCIES[currency]) return currency;
+      }
     } catch {}
     return BASE_CURRENCY;
   }
 
   function saveSelectedCurrency(currency) {
     try { localStorage.setItem(PREF_KEY, currency); } catch {}
+  }
+
+  // ─── IP-based currency detection ─────────────────────────────────────────
+  //
+  // Only runs when no explicit user preference exists.
+  // Primary:  ipapi.co/currency  — returns the currency code directly.
+  // Fallback: api.country.is     — returns country code, mapped via COUNTRY_CURRENCY_MAP.
+  // Result is cached for 24 h so we don't hit the API on every page load.
+
+  async function detectIpCurrency() {
+    // Skip if user already has an explicit preference.
+    try {
+      const saved = localStorage.getItem(PREF_KEY);
+      if (saved && CURRENCIES[saved]) return;
+    } catch {}
+
+    // Skip if we have a fresh cached detection.
+    try {
+      const raw = localStorage.getItem(IP_CURRENCY_KEY);
+      if (raw) {
+        const { currency, ts } = JSON.parse(raw);
+        if (Date.now() - ts < IP_CURRENCY_TTL && CURRENCIES[currency]) {
+          log(`IP currency (cached): ${currency}`);
+          return;
+        }
+      }
+    } catch {}
+
+    let detected = null;
+
+    // Primary source: returns the currency code as plain text.
+    try {
+      const res = await fetch("https://ipapi.co/currency/");
+      if (res.ok) {
+        const code = (await res.text()).trim().toUpperCase();
+        if (CURRENCIES[code]) detected = code;
+      }
+    } catch {}
+
+    // Fallback source: returns country code, map to currency.
+    if (!detected) {
+      try {
+        const res = await fetch("https://api.country.is/");
+        if (res.ok) {
+          const { country } = await res.json();
+          const code = COUNTRY_CURRENCY_MAP[country];
+          if (code && CURRENCIES[code]) detected = code;
+        }
+      } catch {}
+    }
+
+    if (!detected) { log("IP currency detection failed"); return; }
+
+    log(`IP currency detected: ${detected}`);
+    try {
+      localStorage.setItem(IP_CURRENCY_KEY, JSON.stringify({ currency: detected, ts: Date.now() }));
+    } catch {}
+
+    // Apply the detected currency if it differs from what is currently shown.
+    if (detected !== getSelectedCurrency()) return; // user preference took over
+    if (currentBarSelect) currentBarSelect.value = detected;
+    if (cachedRates) convertAllPrices(detected, cachedRates);
   }
 
   // ─── Exchange rates ───────────────────────────────────────────────────────
@@ -609,6 +691,7 @@ export function initCurrencySwitcher(config = {}) {
 
   mountBarSwitcher();
   watchForNewPrices();
+  detectIpCurrency(); // async — applies currency once resolved if no user preference
 
   fetchRates().then((rates) => {
     if (!rates) return;
