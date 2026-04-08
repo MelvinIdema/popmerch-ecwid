@@ -19,32 +19,42 @@ export function initCatalogusSearchExtractor() {
         justify-content: space-between;
         gap: 12px;
         flex-wrap: wrap;
+        margin-top: 16px;
       }
 
       /* Proxy search bar */
       #${PROXY_ID} {
         display: flex;
         align-items: center;
-        border: 2px solid #1a1a1a;
+        background-color: #f5f5f5;
+        border: 1px solid #8faec6;
+        border-radius: 3px;
+        box-shadow: 0 0 0 rgba(0,0,0,0) inset;
         flex: 1 1 200px;
         max-width: 340px;
         box-sizing: border-box;
+        transition: background-color 0.15s ease-out;
+      }
+
+      #${PROXY_ID}:focus-within {
+        background-color: #eef2f6;
       }
 
       #${PROXY_ID} input {
         flex: 1;
         border: none;
         outline: none;
-        padding: 10px 14px;
-        font-size: 14px;
+        padding: 8px 12px;
+        font-size: inherit;
         font-family: inherit;
+        line-height: calc(8px + 1.15em);
         background: transparent;
-        color: #1a1a1a;
+        color: #686868;
         min-width: 0;
       }
 
       #${PROXY_ID} input::placeholder {
-        color: #999;
+        color: #aaa;
       }
 
       #${PROXY_ID} button {
@@ -52,16 +62,15 @@ export function initCatalogusSearchExtractor() {
         border: none;
         background: transparent;
         cursor: pointer;
-        padding: 10px 12px;
+        padding: 8px 10px;
         display: flex;
         align-items: center;
-        color: #1a1a1a;
-        transition: background 0.15s, color 0.15s;
+        color: #8faec6;
+        transition: color 0.15s;
       }
 
       #${PROXY_ID} button:hover {
-        background: #1a1a1a;
-        color: #fff;
+        color: #686868;
       }
 
       /* Keep sort buttons together */
