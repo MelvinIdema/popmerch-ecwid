@@ -454,30 +454,6 @@ export function initCurrencySwitcher(config = {}) {
     }
   }
 
-  // ─── Vue lifecycle hook helper ────────────────────────────────────────────
-
-  function hookVueUpdated(el, callback) {
-    for (const node of [el, el.parentElement, el.parentElement?.parentElement]) {
-      if (!node) continue;
-
-      const inst3 = node.__vueParentComponent ?? node._vueParentComponent;
-      if (inst3) {
-        if (!Array.isArray(inst3.u)) inst3.u = [];
-        inst3.u.push(callback);
-        log("Hooked into Vue 3 onUpdated");
-        return true;
-      }
-
-      const inst2 = node.__vue__;
-      if (inst2?.$on) {
-        inst2.$on("hook:updated", callback);
-        log("Hooked into Vue 2 $on hook:updated");
-        return true;
-      }
-    }
-    return false;
-  }
-
   // ─── Announcement bar switcher ────────────────────────────────────────────
 
   function mountBarSwitcher() {
@@ -529,9 +505,6 @@ export function initCurrencySwitcher(config = {}) {
         // (our span → text node), which is a childList mutation on el, not its parent.
         const obs = new MutationObserver(() => doBarInject(el));
         obs.observe(el, { childList: true });
-
-        // Belt-and-suspenders: also hook Vue's updated() lifecycle if accessible.
-        hookVueUpdated(el, () => doBarInject(el));
 
         doBarInject(el);
         return;
