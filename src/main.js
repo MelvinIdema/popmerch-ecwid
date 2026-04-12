@@ -5,6 +5,7 @@ import { initCurrencySwitcher } from "./currency-switcher.js";
 import { initCatalogusShortDescription } from "./catalogus-short-description.js";
 import { initCatalogusSearchExtractor } from "./catalogus-search-extractor.js";
 import { initReplacePager } from "./replace-pager.js";
+import { initMolliePaymentIcons } from "./mollie-payment-icons.js";
 
 // Replace with your Geoapify API key (https://myprojects.geoapify.com)
 const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
@@ -50,6 +51,10 @@ safeInit("catalogus search extractor", () => {
 
 safeInit("replace pager", () => {
   initReplacePager();
+});
+
+safeInit("mollie payment icons", () => {
+  initMolliePaymentIcons();
 });
 
 if (ENABLE_CURRENCY_SWITCHER) {
