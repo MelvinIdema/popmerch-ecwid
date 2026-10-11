@@ -9,8 +9,9 @@ import { initMolliePaymentIcons } from "./mollie-payment-icons.js";
 
 // Replace with your Geoapify API key (https://myprojects.geoapify.com)
 const GEOAPIFY_API_KEY = "c70aedc3c26e44238b962936e3757ec4";
-const BUNDLE_VERSION = "2026-03-21-inline-checkout-5";
-const ENABLE_ADDRESS_VALIDATION = true;
+const BUNDLE_VERSION = "2026-10-11-no-address-validation";
+// Replaced by the HERE-backed check in popmerch-headless (components/checkout/address-check.tsx).
+const ENABLE_ADDRESS_VALIDATION = false;
 const ENABLE_CURRENCY_SWITCHER =
   localStorage.getItem("ENABLE_CURRENCY_SWITCHER") === "true" || true;
 
